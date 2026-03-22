@@ -1,8 +1,13 @@
-import React, {useState} from 'react';
-import {View, StyleSheet, ScrollView, KeyboardAvoidingView, TouchableOpacity, ActivityIndicator} from 'react-native';
+import React, {useState, useEffect} from 'react';
+import {View, StyleSheet, ScrollView, KeyboardAvoidingView, TouchableOpacity, ActivityIndicator, Switch} from 'react-native';
 import {TextInput, Button, Text, HelperText} from 'react-native-paper';
+import {useNavigation} from '@react-navigation/native';
+import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import {SmbModule} from '../native/SmbModule';
 import {theme} from '../theme';
+import {RootStackParamList} from '../navigation';
+import {saveCredentials, loadCredentials, clearCredentials} from '../utils/credentialStore';
+import {useConnectionStore} from '../stores/useConnectionStore';
 
 interface DiscoveredServer {
   ip: string;
@@ -10,83 +15,95 @@ interface DiscoveredServer {
 }
 
 export const ConnectionScreen: React.FC = () => {
-  const [host, setHost] = useState('');
-  const [shareName, setShareName] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [domain, setDomain] = useState('');
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  
+  // Zustand store
+  const {
+    host,
+    shareName,
+    username,
+    password,
+    domain,
+    isConnecting,
+    error,
+    setHost,
+    setShareName,
+    setUsername,
+    setPassword,
+    setDomain,
+    validateAndConnect,
+    reset,
+  } = useConnectionStore();
 
-  // Scan state
+  // Local state for UI-specific features
+  const [stayLoggedIn, setStayLoggedIn] = useState(false);
+  const [autoConnecting, setAutoConnecting] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [discoveredServers, setDiscoveredServers] = useState<DiscoveredServer[]>([]);
   const [scanDone, setScanDone] = useState(false);
 
-  const validateInputs = (): boolean => {
-    if (!host || host.trim() === '') {
-      setError('Host address is required');
-      return false;
-    }
-    if (!shareName || shareName.trim() === '') {
-      setError('Share name is required');
-      return false;
-    }
-    return true;
-  };
-
-  const mapErrorToMessage = (err: any): string => {
-    const errorMessage = err?.message || err?.toString() || '';
-    const errorCode = err?.code || '';
-
-    if (
-      errorMessage.toLowerCase().includes('auth') ||
-      errorMessage.toLowerCase().includes('credential') ||
-      errorMessage.toLowerCase().includes('login') ||
-      errorCode === 'SMB_ERROR'
-    ) {
-      return 'Incorrect username or password. Please check your credentials.';
-    }
-
-    if (
-      errorMessage.toLowerCase().includes('network') ||
-      errorMessage.toLowerCase().includes('unreachable') ||
-      errorMessage.toLowerCase().includes('timeout') ||
-      errorMessage.toLowerCase().includes('connection') ||
-      errorCode === 'NETWORK_ERROR'
-    ) {
-      return 'Cannot reach the server. Please check the host address and network connection.';
-    }
-
-    return `Connection failed: ${errorMessage}`;
-  };
+  // Load saved credentials on mount and auto-connect
+  useEffect(() => {
+    const loadSaved = async () => {
+      const saved = await loadCredentials();
+      if (saved) {
+        // Auto-connect with saved credentials
+        try {
+          await SmbModule.listFiles(
+            saved.host,
+            saved.shareName,
+            '',
+            saved.username,
+            saved.password,
+            saved.domain || null,
+          );
+          // Success — navigate directly
+          navigation.reset({
+            index: 0,
+            routes: [{
+              name: 'FileBrowser',
+              params: {credentials: saved},
+            }],
+          });
+        } catch {
+          // Auto-connect failed — fill form and let user retry
+          setHost(saved.host);
+          setShareName(saved.shareName);
+          setUsername(saved.username);
+          setPassword(saved.password);
+          setDomain(saved.domain || '');
+          setStayLoggedIn(true);
+          setAutoConnecting(false);
+        }
+      } else {
+        setAutoConnecting(false);
+      }
+    };
+    loadSaved();
+  }, []);
 
   const handleConnect = async () => {
-    setError(null);
-
-    if (!validateInputs()) {
-      return;
-    }
-
-    setIsConnecting(true);
-
-    try {
-      await SmbModule.listFiles(
-        host.trim(),
-        shareName.trim(),
-        '',
+    const success = await validateAndConnect();
+    
+    if (success) {
+      const creds = {
+        host: host.trim(),
+        shareName: shareName.trim(),
         username,
         password,
-        domain || null,
-      );
+        domain: domain || undefined,
+      };
 
-      setError(null);
-      console.log('Connection successful! Navigation to be implemented.');
-    } catch (err) {
-      const errorMessage = mapErrorToMessage(err);
-      setError(errorMessage);
-    } finally {
-      setIsConnecting(false);
+      // Save or clear credentials based on toggle
+      if (stayLoggedIn) {
+        await saveCredentials(creds);
+      } else {
+        await clearCredentials();
+      }
+
+      navigation.navigate('FileBrowser', {
+        credentials: creds,
+      });
     }
   };
 
@@ -109,6 +126,18 @@ export const ConnectionScreen: React.FC = () => {
   const handleSelectServer = (ip: string) => {
     setHost(ip);
   };
+
+  if (autoConnecting) {
+    return (
+      <View style={styles.autoConnectContainer}>
+        <View style={styles.iconCircle}>
+          <Text style={styles.iconText}>S</Text>
+        </View>
+        <ActivityIndicator size="large" color={theme.colors.primary} style={{marginTop: 24}} />
+        <Text style={styles.autoConnectText}>Connecting...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -296,6 +325,20 @@ export const ConnectionScreen: React.FC = () => {
               outlineStyle={styles.inputOutline}
             />
           </View>
+
+          {/* Stay Logged In Toggle */}
+          <TouchableOpacity
+            style={styles.stayLoggedInRow}
+            onPress={() => setStayLoggedIn(!stayLoggedIn)}
+            activeOpacity={0.7}>
+            <Text style={styles.stayLoggedInText}>Stay logged in</Text>
+            <Switch
+              value={stayLoggedIn}
+              onValueChange={setStayLoggedIn}
+              trackColor={{false: theme.colors.outline, true: theme.colors.primary + '66'}}
+              thumbColor={stayLoggedIn ? theme.colors.primary : theme.colors.surfaceVariant}
+            />
+          </TouchableOpacity>
 
           {/* Error Message */}
           {error && (
@@ -519,5 +562,29 @@ const styles = StyleSheet.create({
     color: theme.colors.onSurfaceVariant,
     textAlign: 'center',
     marginTop: 12,
+  },
+  stayLoggedInRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    paddingHorizontal: 4,
+  },
+  stayLoggedInText: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 13,
+    color: theme.colors.onSurface,
+  },
+  autoConnectContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  autoConnectText: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 14,
+    color: theme.colors.onSurfaceVariant,
+    marginTop: 16,
   },
 });

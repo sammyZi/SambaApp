@@ -9,8 +9,13 @@ import React from 'react';
 import {StatusBar} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import {PaperProvider} from 'react-native-paper';
-import {ConnectionScreen} from './src/screens';
+import {NavigationContainer} from '@react-navigation/native';
+import {createNativeStackNavigator} from '@react-navigation/native-stack';
+import {ConnectionScreen, FileBrowserScreen} from './src/screens';
 import {theme} from './src/theme';
+import {RootStackParamList} from './src/navigation';
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function App() {
   return (
@@ -20,7 +25,22 @@ function App() {
           barStyle="dark-content"
           backgroundColor={theme.colors.background}
         />
-        <ConnectionScreen />
+        <NavigationContainer>
+          <Stack.Navigator
+            initialRouteName="Connection"
+            screenOptions={{
+              headerShown: false,
+              animation: 'slide_from_right',
+              contentStyle: {backgroundColor: theme.colors.background},
+            }}>
+            <Stack.Screen name="Connection" component={ConnectionScreen} />
+            <Stack.Screen
+              name="FileBrowser"
+              component={FileBrowserScreen}
+              options={{headerShown: false}}
+            />
+          </Stack.Navigator>
+        </NavigationContainer>
       </PaperProvider>
     </SafeAreaProvider>
   );
