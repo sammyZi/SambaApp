@@ -21,6 +21,27 @@ interface SmbModuleInterface {
     localFileName: string,
   ): Promise<string>;
 
+  downloadFileToPath(
+    host: string,
+    shareName: string,
+    remotePath: string,
+    username: string,
+    password: string,
+    domain: string | null,
+    localFilePath: string,
+  ): Promise<string>;
+
+  downloadFileWithProgress(
+    host: string,
+    shareName: string,
+    remotePath: string,
+    username: string,
+    password: string,
+    domain: string | null,
+    localFileName: string,
+    downloadId: string,
+  ): Promise<string>;
+
   scanNetwork(): Promise<Array<{ip: string; hostname: string}>>;
 }
 

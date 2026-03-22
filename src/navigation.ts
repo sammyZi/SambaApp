@@ -6,4 +6,5 @@ export type RootStackParamList = {
     credentials: SmbCredentials;
     initialPath?: string;
   };
+  Downloads: undefined;
 };

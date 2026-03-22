@@ -1,4 +1,4 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
   View,
   StyleSheet,
@@ -6,8 +6,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   BackHandler,
+  ScrollView,
 } from 'react-native';
-import {Text, Button, Snackbar} from 'react-native-paper';
+import {Text, Button, Snackbar, Searchbar, Chip} from 'react-native-paper';
 import {useRoute, useNavigation, CommonActions} from '@react-navigation/native';
 import type {RouteProp} from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -15,9 +16,18 @@ import {FileItem} from '../native/types';
 import {theme} from '../theme';
 import {RootStackParamList} from '../navigation';
 import {clearCredentials} from '../utils/credentialStore';
-import {useFileBrowserStore} from '../stores/useFileBrowserStore';
+import {useFileBrowserStore, FileTypeFilter} from '../stores/useFileBrowserStore';
 
 type FileBrowserRouteProp = RouteProp<RootStackParamList, 'FileBrowser'>;
+
+const FILTER_OPTIONS: {type: FileTypeFilter; label: string; icon: string}[] = [
+  {type: 'folder', label: 'Folders', icon: 'folder'},
+  {type: 'image', label: 'Images', icon: 'image'},
+  {type: 'video', label: 'Videos', icon: 'video'},
+  {type: 'audio', label: 'Audio', icon: 'music'},
+  {type: 'document', label: 'Documents', icon: 'file-document'},
+  {type: 'archive', label: 'Archives', icon: 'folder-zip'},
+];
 
 // Map common file extensions to icon names
 const getFileIcon = (name: string, type: string): {iconName: string; color: string} => {
@@ -59,12 +69,15 @@ export const FileBrowserScreen: React.FC = () => {
     currentPath,
     navigationStack,
     items,
+    filteredItems,
     isLoading,
     error,
     downloadingFile,
     snackbarVisible,
     snackbarMessage,
     snackbarType,
+    searchQuery,
+    activeFilters,
     setCredentials,
     setCurrentPath,
     loadFiles,
@@ -72,8 +85,14 @@ export const FileBrowserScreen: React.FC = () => {
     navigateBack,
     downloadFile,
     hideSnackbar,
+    setSearchQuery,
+    toggleFilter,
+    clearFilters,
     reset,
+    openFile,
   } = useFileBrowserStore();
+
+  const [showFilters, setShowFilters] = useState(false);
 
   // Initialize store with credentials and path
   useEffect(() => {
@@ -106,6 +125,12 @@ export const FileBrowserScreen: React.FC = () => {
   };
 
   const onFilePress = (fileName: string, filePath: string) => {
+    // Open file with default app
+    openFile(fileName, filePath);
+  };
+
+  const onDownloadPress = (fileName: string, filePath: string) => {
+    // Download to default location
     downloadFile(fileName, filePath);
   };
 
@@ -126,6 +151,7 @@ export const FileBrowserScreen: React.FC = () => {
     const canGoBack = navigationStack.length > 0;
     const pathParts = currentPath ? currentPath.split('/') : [];
     const currentFolder = pathParts.length > 0 ? pathParts[pathParts.length - 1] : credentials.shareName;
+    const hasActiveFilters = activeFilters.length > 0 || searchQuery.trim() !== '';
 
     return (
       <View style={styles.header}>
@@ -139,20 +165,84 @@ export const FileBrowserScreen: React.FC = () => {
                 <Icon name="chevron-left" size={24} color={theme.colors.primary} />
               </TouchableOpacity>
             )}
-            <View>
+            <View style={styles.headerTitleContainer}>
               <Text style={styles.headerTitle}>{currentFolder}</Text>
               <Text style={styles.headerSubtitle}>
-                {credentials.host} · {items.length} items
+                {credentials.host} · {filteredItems.length} of {items.length} items
               </Text>
             </View>
           </View>
-          <TouchableOpacity
-            onPress={handleSignOut}
-            style={styles.signOutButton}
-            activeOpacity={0.7}>
-            <Text style={styles.signOutText}>Sign Out</Text>
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={() => setShowFilters(!showFilters)}
+              style={[styles.iconButton, hasActiveFilters && styles.iconButtonActive]}
+              activeOpacity={0.7}>
+              <Icon 
+                name={showFilters ? "filter-off" : "filter-variant"} 
+                size={20} 
+                color={hasActiveFilters ? theme.colors.primary : theme.colors.onSurfaceVariant} 
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Downloads' as never)}
+              style={styles.iconButton}
+              activeOpacity={0.7}>
+              <Icon name="download" size={20} color={theme.colors.primary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleSignOut}
+              style={styles.iconButton}
+              activeOpacity={0.7}>
+              <Icon name="logout" size={20} color={theme.colors.error} />
+            </TouchableOpacity>
+          </View>
         </View>
+
+        {/* Search Bar */}
+        <Searchbar
+          placeholder="Search files..."
+          onChangeText={setSearchQuery}
+          value={searchQuery}
+          style={styles.searchBar}
+          inputStyle={styles.searchInput}
+          iconColor={theme.colors.onSurfaceVariant}
+          placeholderTextColor={theme.colors.onSurfaceVariant}
+        />
+
+        {/* Filter Chips */}
+        {showFilters && (
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterContainer}
+            contentContainerStyle={styles.filterContent}>
+            {FILTER_OPTIONS.map((filter) => (
+              <Chip
+                key={filter.type}
+                selected={activeFilters.includes(filter.type)}
+                onPress={() => toggleFilter(filter.type)}
+                style={[
+                  styles.filterChip,
+                  activeFilters.includes(filter.type) && styles.filterChipSelected,
+                ]}
+                textStyle={styles.filterChipText}
+                icon={filter.icon}
+                mode="outlined">
+                {filter.label}
+              </Chip>
+            ))}
+            {hasActiveFilters && (
+              <Chip
+                onPress={clearFilters}
+                style={styles.clearFilterChip}
+                textStyle={styles.clearFilterChipText}
+                icon="close-circle"
+                mode="flat">
+                Clear
+              </Chip>
+            )}
+          </ScrollView>
+        )}
 
         {/* Breadcrumb */}
         {currentPath !== '' && (
@@ -196,6 +286,17 @@ export const FileBrowserScreen: React.FC = () => {
         </View>
         {item.type === 'directory' && (
           <Icon name="chevron-right" size={24} color={theme.colors.onSurfaceVariant} />
+        )}
+        {item.type === 'file' && !isDownloading && (
+          <TouchableOpacity
+            style={styles.downloadButton}
+            onPress={(e) => {
+              e.stopPropagation();
+              onDownloadPress(item.name, item.path);
+            }}
+            activeOpacity={0.7}>
+            <Icon name="download" size={20} color={theme.colors.primary} />
+          </TouchableOpacity>
         )}
         {isDownloading && (
           <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -250,7 +351,7 @@ export const FileBrowserScreen: React.FC = () => {
 
     return (
       <FlatList
-        data={items}
+        data={filteredItems}
         renderItem={renderItem}
         keyExtractor={(item, index) => `${item.path}-${index}`}
         contentContainerStyle={styles.listContent}
@@ -285,7 +386,7 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: theme.colors.surface,
     paddingTop: 12,
-    paddingBottom: 12,
+    paddingBottom: 8,
     paddingHorizontal: 20,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.outline,
@@ -294,11 +395,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginBottom: 12,
   },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+  },
+  headerTitleContainer: {
+    flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   backButton: {
     width: 32,
@@ -308,6 +418,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: theme.colors.surfaceVariant,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconButtonActive: {
+    backgroundColor: theme.colors.primary + '20',
   },
   headerTitle: {
     fontFamily: 'Poppins-SemiBold',
@@ -320,19 +441,49 @@ const styles = StyleSheet.create({
     color: theme.colors.onSurfaceVariant,
     marginTop: 1,
   },
-  signOutButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 8,
+  searchBar: {
+    marginTop: 8,
+    marginBottom: 8,
     backgroundColor: theme.colors.surfaceVariant,
+    borderRadius: 10,
+    elevation: 0,
   },
-  signOutText: {
+  searchInput: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 13,
+  },
+  filterContainer: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  filterContent: {
+    paddingRight: 20,
+    gap: 8,
+  },
+  filterChip: {
+    marginRight: 8,
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.outline,
+  },
+  filterChipSelected: {
+    backgroundColor: theme.colors.primary + '20',
+    borderColor: theme.colors.primary,
+  },
+  filterChipText: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 11,
+  },
+  clearFilterChip: {
+    marginRight: 8,
+    backgroundColor: theme.colors.errorContainer || '#FDECEA',
+  },
+  clearFilterChipText: {
     fontFamily: 'Poppins-Medium',
     fontSize: 11,
     color: theme.colors.error,
   },
   breadcrumb: {
-    marginTop: 10,
+    marginTop: 8,
     paddingHorizontal: 10,
     paddingVertical: 6,
     backgroundColor: theme.colors.surfaceVariant,
@@ -378,6 +529,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: theme.colors.onSurfaceVariant,
     marginTop: 2,
+  },
+  downloadButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: theme.colors.surfaceVariant,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
   },
   centerContainer: {
     flex: 1,

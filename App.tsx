@@ -12,6 +12,7 @@ import {PaperProvider} from 'react-native-paper';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {ConnectionScreen, FileBrowserScreen} from './src/screens';
+import {DownloadsScreen} from './src/screens/DownloadsScreen';
 import {theme} from './src/theme';
 import {RootStackParamList} from './src/navigation';
 
@@ -37,6 +38,11 @@ function App() {
             <Stack.Screen
               name="FileBrowser"
               component={FileBrowserScreen}
+              options={{headerShown: false}}
+            />
+            <Stack.Screen
+              name="Downloads"
+              component={DownloadsScreen}
               options={{headerShown: false}}
             />
           </Stack.Navigator>

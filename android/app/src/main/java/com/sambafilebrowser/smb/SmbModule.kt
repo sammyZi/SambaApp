@@ -7,6 +7,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.hierynomus.smbj.SMBClient
 import com.hierynomus.smbj.auth.AuthenticationContext
 import com.hierynomus.smbj.connection.Connection
@@ -242,6 +243,94 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
     }
 
     @ReactMethod
+    fun downloadFileToPath(
+        host: String,
+        shareName: String,
+        remotePath: String,
+        username: String,
+        password: String,
+        domain: String?,
+        localFilePath: String,
+        promise: Promise
+    ) {
+        executor.execute {
+            var connection: Connection? = null
+            var session: Session? = null
+            var share: DiskShare? = null
+            
+            try {
+                val localFile = File(localFilePath)
+                
+                // Create parent directory if it doesn't exist
+                localFile.parentFile?.let { parentDir ->
+                    if (!parentDir.exists()) {
+                        parentDir.mkdirs()
+                    }
+                }
+                
+                // Create SMB client and connect
+                val client = SMBClient()
+                connection = client.connect(host)
+                
+                // Authenticate
+                val authContext = if (domain != null && domain.isNotEmpty()) {
+                    AuthenticationContext(username, password.toCharArray(), domain)
+                } else {
+                    AuthenticationContext(username, password.toCharArray(), null)
+                }
+                session = connection.authenticate(authContext)
+                
+                // Connect to share
+                share = session.connectShare(shareName) as DiskShare
+                
+                // Open remote file and stream to local storage
+                val smbFile = share.openFile(
+                    remotePath,
+                    EnumSet.of(AccessMask.GENERIC_READ),
+                    null,
+                    EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
+                    SMB2CreateDisposition.FILE_OPEN,
+                    null
+                )
+                
+                // Stream file data in 8KB chunks
+                val inputStream = smbFile.inputStream
+                val outputStream = FileOutputStream(localFile)
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                }
+                
+                outputStream.close()
+                inputStream.close()
+                smbFile.close()
+                
+                // Return absolute local file path
+                promise.resolve(localFile.absolutePath)
+                
+            } catch (e: com.hierynomus.mssmb2.SMBApiException) {
+                promise.reject("SMB_ERROR", "SMB operation failed: ${e.message}", e)
+            } catch (e: com.hierynomus.smbj.common.SMBRuntimeException) {
+                promise.reject("SMB_ERROR", "Authentication failed: ${e.message}", e)
+            } catch (e: java.io.IOException) {
+                promise.reject("NETWORK_ERROR", "Network error: ${e.message}", e)
+            } catch (e: Exception) {
+                promise.reject("UNKNOWN_ERROR", "Operation failed: ${e.message}", e)
+            } finally {
+                try {
+                    share?.close()
+                    session?.close()
+                    connection?.close()
+                } catch (e: Exception) {
+                    // Ignore cleanup errors
+                }
+            }
+        }
+    }
+
+    @ReactMethod
     fun scanNetwork(promise: Promise) {
         executor.execute {
             try {
@@ -334,5 +423,127 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
             // Ignore
         }
         return null
+    }
+
+    @ReactMethod
+    fun downloadFileWithProgress(
+        host: String,
+        shareName: String,
+        remotePath: String,
+        username: String,
+        password: String,
+        domain: String?,
+        localFileName: String,
+        downloadId: String,
+        promise: Promise
+    ) {
+        executor.execute {
+            var connection: Connection? = null
+            var session: Session? = null
+            var share: DiskShare? = null
+            
+            try {
+                // Get app-specific storage directory
+                val storageDir = reactApplicationContext.getExternalFilesDir(null)
+                    ?: reactApplicationContext.filesDir
+                
+                // Create storage directory if it doesn't exist
+                if (!storageDir.exists()) {
+                    storageDir.mkdirs()
+                }
+                
+                // Check for file name conflicts and generate unique name if needed
+                var finalFileName = localFileName
+                var localFile = File(storageDir, finalFileName)
+                var counter = 1
+                
+                while (localFile.exists()) {
+                    val nameParts = localFileName.split(".")
+                    finalFileName = if (nameParts.size > 1) {
+                        val name = nameParts.dropLast(1).joinToString(".")
+                        val extension = nameParts.last()
+                        "${name}_${counter}.${extension}"
+                    } else {
+                        "${localFileName}_${counter}"
+                    }
+                    localFile = File(storageDir, finalFileName)
+                    counter++
+                }
+                
+                // Create SMB client and connect
+                val client = SMBClient()
+                connection = client.connect(host)
+                
+                // Authenticate
+                val authContext = if (domain != null && domain.isNotEmpty()) {
+                    AuthenticationContext(username, password.toCharArray(), domain)
+                } else {
+                    AuthenticationContext(username, password.toCharArray(), null)
+                }
+                session = connection.authenticate(authContext)
+                
+                // Connect to share
+                share = session.connectShare(shareName) as DiskShare
+                
+                // Open remote file and stream to local storage
+                val smbFile = share.openFile(
+                    remotePath,
+                    EnumSet.of(AccessMask.GENERIC_READ),
+                    null,
+                    EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ),
+                    SMB2CreateDisposition.FILE_OPEN,
+                    null
+                )
+                
+                // Get file size
+                val fileSize = smbFile.fileInformation.standardInformation.endOfFile
+                
+                // Stream file data in 8KB chunks with progress updates
+                val inputStream = smbFile.inputStream
+                val outputStream = FileOutputStream(localFile)
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                var totalBytesRead: Long = 0
+                
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                    totalBytesRead += bytesRead
+                    
+                    // Send progress event
+                    val params = Arguments.createMap()
+                    params.putString("downloadId", downloadId)
+                    params.putDouble("downloadedBytes", totalBytesRead.toDouble())
+                    params.putDouble("totalBytes", fileSize.toDouble())
+                    
+                    reactApplicationContext
+                        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                        .emit("downloadProgress", params)
+                }
+                
+                outputStream.close()
+                inputStream.close()
+                smbFile.close()
+                
+                // Return absolute local file path
+                promise.resolve(localFile.absolutePath)
+                
+            } catch (e: com.hierynomus.mssmb2.SMBApiException) {
+                promise.reject("SMB_ERROR", "SMB operation failed: ${e.message}", e)
+            } catch (e: com.hierynomus.smbj.common.SMBRuntimeException) {
+                promise.reject("SMB_ERROR", "Authentication failed: ${e.message}", e)
+            } catch (e: java.io.IOException) {
+                promise.reject("NETWORK_ERROR", "Network error: ${e.message}", e)
+            } catch (e: Exception) {
+                promise.reject("UNKNOWN_ERROR", "Operation failed: ${e.message}", e)
+            } finally {
+                try {
+                    share?.close()
+                    session?.close()
+                    connection?.close()
+                } catch (e: Exception) {
+                    // Ignore cleanup errors
+                }
+            }
+        }
     }
 }
