@@ -20,6 +20,8 @@ interface SmbModuleInterface {
     domain: string | null,
     localFileName: string,
   ): Promise<string>;
+
+  scanNetwork(): Promise<Array<{ip: string; hostname: string}>>;
 }
 
 export const SmbModule: SmbModuleInterface = NativeModules.SmbModule;

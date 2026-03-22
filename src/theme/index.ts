@@ -1,137 +1,140 @@
 import { MD3LightTheme, configureFonts } from 'react-native-paper';
 import type { MD3Theme } from 'react-native-paper';
 
-// Calm neutral color palette
+// Professional light color palette
 const colors = {
-  primary: '#5B7C99',        // Muted blue-gray
-  secondary: '#7A8F9E',      // Soft gray-blue
-  tertiary: '#9EADB8',       // Light gray-blue
-  background: '#F5F7F9',     // Very light gray
-  surface: '#FFFFFF',        // White
-  surfaceVariant: '#E8ECEF', // Light gray
-  error: '#C85A54',          // Muted red
-  onPrimary: '#FFFFFF',      // White text on primary
-  onSecondary: '#FFFFFF',    // White text on secondary
-  onBackground: '#2C3E50',   // Dark gray text
-  onSurface: '#2C3E50',      // Dark gray text
-  onError: '#FFFFFF',        // White text on error
-  outline: '#D1D9E0',        // Light border color
-  shadow: '#000000',         // Black shadow
-  inverseSurface: '#2C3E50', // Dark surface
-  inverseOnSurface: '#FFFFFF', // White text on dark
-  inversePrimary: '#A8C5E0', // Light blue
+  primary: '#3B6B9C',          // Refined blue
+  secondary: '#5A8AB5',        // Medium blue
+  tertiary: '#7FA8C9',         // Soft blue
+  background: '#F7F8FA',       // Clean off-white
+  surface: '#FFFFFF',          // Pure white
+  surfaceVariant: '#EEF1F5',   // Subtle gray
+  error: '#C0392B',            // Clean red
+  errorContainer: '#FDECEA',   // Light red bg
+  onPrimary: '#FFFFFF',
+  onSecondary: '#FFFFFF',
+  onBackground: '#1E2A36',     // Dark text
+  onSurface: '#1E2A36',        // Dark text
+  onSurfaceVariant: '#6B7A8A', // Muted secondary text
+  onError: '#FFFFFF',
+  outline: '#D5DBE1',          // Subtle border
+  outlineVariant: '#E3E8ED',   // Lighter border
+  shadow: '#000000',
+  inverseSurface: '#1E2A36',
+  inverseOnSurface: '#F7F8FA',
+  inversePrimary: '#A3C4E0',
 };
 
-// Configure Nunito font family
+// Configure Poppins font family — smaller, cleaner sizes
 const fontConfig = {
   displayLarge: {
-    fontFamily: 'Nunito-Bold',
-    fontSize: 57,
+    fontFamily: 'Poppins-Bold',
+    fontSize: 40,
     fontWeight: '700' as const,
-    letterSpacing: 0,
-    lineHeight: 64,
+    letterSpacing: -0.5,
+    lineHeight: 48,
   },
   displayMedium: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 45,
-    fontWeight: '600' as const,
-    letterSpacing: 0,
-    lineHeight: 52,
-  },
-  displaySmall: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 36,
-    fontWeight: '600' as const,
-    letterSpacing: 0,
-    lineHeight: 44,
-  },
-  headlineLarge: {
-    fontFamily: 'Nunito-SemiBold',
+    fontFamily: 'Poppins-SemiBold',
     fontSize: 32,
     fontWeight: '600' as const,
-    letterSpacing: 0,
+    letterSpacing: -0.25,
     lineHeight: 40,
   },
-  headlineMedium: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 28,
+  displaySmall: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 26,
     fontWeight: '600' as const,
     letterSpacing: 0,
-    lineHeight: 36,
+    lineHeight: 34,
   },
-  headlineSmall: {
-    fontFamily: 'Nunito-SemiBold',
+  headlineLarge: {
+    fontFamily: 'Poppins-SemiBold',
     fontSize: 24,
     fontWeight: '600' as const,
     letterSpacing: 0,
     lineHeight: 32,
   },
-  titleLarge: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 22,
+  headlineMedium: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 20,
     fontWeight: '600' as const,
     letterSpacing: 0,
     lineHeight: 28,
   },
-  titleMedium: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 16,
+  headlineSmall: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 18,
     fontWeight: '600' as const,
-    letterSpacing: 0.15,
+    letterSpacing: 0,
+    lineHeight: 26,
+  },
+  titleLarge: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 17,
+    fontWeight: '600' as const,
+    letterSpacing: 0,
     lineHeight: 24,
   },
-  titleSmall: {
-    fontFamily: 'Nunito-SemiBold',
+  titleMedium: {
+    fontFamily: 'Poppins-Medium',
     fontSize: 14,
-    fontWeight: '600' as const,
+    fontWeight: '500' as const,
     letterSpacing: 0.1,
     lineHeight: 20,
   },
-  bodyLarge: {
-    fontFamily: 'Nunito-Regular',
-    fontSize: 16,
-    fontWeight: '400' as const,
-    letterSpacing: 0.5,
-    lineHeight: 24,
+  titleSmall: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 12,
+    fontWeight: '500' as const,
+    letterSpacing: 0.1,
+    lineHeight: 18,
   },
-  bodyMedium: {
-    fontFamily: 'Nunito-Regular',
+  bodyLarge: {
+    fontFamily: 'Poppins-Regular',
     fontSize: 14,
     fontWeight: '400' as const,
     letterSpacing: 0.25,
     lineHeight: 20,
   },
-  bodySmall: {
-    fontFamily: 'Nunito-Regular',
-    fontSize: 12,
+  bodyMedium: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 13,
     fontWeight: '400' as const,
-    letterSpacing: 0.4,
+    letterSpacing: 0.2,
+    lineHeight: 18,
+  },
+  bodySmall: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 11,
+    fontWeight: '400' as const,
+    letterSpacing: 0.3,
     lineHeight: 16,
   },
   labelLarge: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 14,
-    fontWeight: '600' as const,
+    fontFamily: 'Poppins-Medium',
+    fontSize: 13,
+    fontWeight: '500' as const,
     letterSpacing: 0.1,
-    lineHeight: 20,
+    lineHeight: 18,
   },
   labelMedium: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 12,
-    fontWeight: '600' as const,
-    letterSpacing: 0.5,
+    fontFamily: 'Poppins-Medium',
+    fontSize: 11,
+    fontWeight: '500' as const,
+    letterSpacing: 0.3,
     lineHeight: 16,
   },
   labelSmall: {
-    fontFamily: 'Nunito-SemiBold',
-    fontSize: 11,
-    fontWeight: '600' as const,
-    letterSpacing: 0.5,
-    lineHeight: 16,
+    fontFamily: 'Poppins-Medium',
+    fontSize: 10,
+    fontWeight: '500' as const,
+    letterSpacing: 0.3,
+    lineHeight: 14,
   },
 };
 
-// Create custom theme
+// Create custom light theme
 export const theme: MD3Theme = {
   ...MD3LightTheme,
   colors: {
@@ -139,5 +142,5 @@ export const theme: MD3Theme = {
     ...colors,
   },
   fonts: configureFonts({ config: fontConfig }),
-  roundness: 8, // Moderate rounded corners
+  roundness: 10,
 };

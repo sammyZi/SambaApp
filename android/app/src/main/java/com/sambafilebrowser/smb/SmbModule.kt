@@ -21,8 +21,15 @@ import com.hierynomus.msdtyp.AccessMask
 import java.util.EnumSet
 import java.io.File
 import java.io.FileOutputStream
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.TimeUnit
 
 /**
  * Native module for SMB operations using SMBJ library
@@ -232,5 +239,100 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
                 }
             }
         }
+    }
+
+    @ReactMethod
+    fun scanNetwork(promise: Promise) {
+        executor.execute {
+            try {
+                // Find the device's local IP to determine the subnet
+                val subnet = getLocalSubnet()
+                if (subnet == null) {
+                    promise.reject("NETWORK_ERROR", "Could not determine local network subnet")
+                    return@execute
+                }
+
+                val foundServers = CopyOnWriteArrayList<WritableMap>()
+                val scanPool = Executors.newFixedThreadPool(50)
+                val latch = CountDownLatch(254)
+
+                // Scan all IPs in the /24 subnet for port 445 (SMB)
+                for (i in 1..254) {
+                    val targetIp = "$subnet.$i"
+                    scanPool.execute {
+                        try {
+                            val socket = Socket()
+                            socket.connect(InetSocketAddress(targetIp, 445), 300)
+                            socket.close()
+
+                            // Port 445 is open — this is an SMB server
+                            val serverInfo: WritableMap = Arguments.createMap()
+                            serverInfo.putString("ip", targetIp)
+
+                            // Try to resolve hostname
+                            try {
+                                val addr = InetAddress.getByName(targetIp)
+                                val hostname = addr.canonicalHostName
+                                if (hostname != targetIp) {
+                                    serverInfo.putString("hostname", hostname)
+                                } else {
+                                    serverInfo.putString("hostname", "")
+                                }
+                            } catch (e: Exception) {
+                                serverInfo.putString("hostname", "")
+                            }
+
+                            foundServers.add(serverInfo)
+                        } catch (e: Exception) {
+                            // Port not open or host unreachable — skip
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                }
+
+                // Wait for all scans to complete (max 10 seconds)
+                latch.await(10, TimeUnit.SECONDS)
+                scanPool.shutdownNow()
+
+                val result: WritableArray = Arguments.createArray()
+                for (server in foundServers) {
+                    result.pushMap(server)
+                }
+
+                promise.resolve(result)
+
+            } catch (e: Exception) {
+                promise.reject("SCAN_ERROR", "Network scan failed: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun getLocalSubnet(): String? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                if (networkInterface.isLoopback || !networkInterface.isUp) continue
+
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val addr = addresses.nextElement()
+                    val hostAddress = addr.hostAddress ?: continue
+
+                    // Only consider IPv4 addresses, skip loopback
+                    if (hostAddress.contains(":") || hostAddress.startsWith("127.")) continue
+
+                    // Return the first 3 octets as the subnet
+                    val parts = hostAddress.split(".")
+                    if (parts.size == 4) {
+                        return "${parts[0]}.${parts[1]}.${parts[2]}"
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore
+        }
+        return null
     }
 }
