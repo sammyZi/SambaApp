@@ -1,11 +1,5 @@
-import { NativeModules } from 'react-native';
-
-export interface FileItem {
-  name: string;
-  type: 'file' | 'directory';
-  size: number;
-  path: string;
-}
+import {NativeModules} from 'react-native';
+import {FileItem} from './types';
 
 interface SmbModuleInterface {
   listFiles(
@@ -14,9 +8,9 @@ interface SmbModuleInterface {
     folderPath: string,
     username: string,
     password: string,
-    domain: string | null
+    domain: string | null,
   ): Promise<FileItem[]>;
-  
+
   downloadFile(
     host: string,
     shareName: string,
@@ -24,7 +18,7 @@ interface SmbModuleInterface {
     username: string,
     password: string,
     domain: string | null,
-    localFileName: string
+    localFileName: string,
   ): Promise<string>;
 }
 

@@ -6,7 +6,8 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
 /**
- * Package that registers the SmbModule with React Native
+ * React Native package for SMB module
+ * Registers SmbModule with the React Native bridge
  */
 class SmbPackage : ReactPackage {
     
