@@ -17,6 +17,7 @@ import {theme} from '../theme';
 import {RootStackParamList} from '../navigation';
 import {clearCredentials} from '../utils/credentialStore';
 import {useFileBrowserStore, FileTypeFilter} from '../stores/useFileBrowserStore';
+import {useDownloadStore} from '../stores/useDownloadStore';
 
 type FileBrowserRouteProp = RouteProp<RootStackParamList, 'FileBrowser'>;
 
@@ -78,18 +79,26 @@ export const FileBrowserScreen: React.FC = () => {
     snackbarType,
     searchQuery,
     activeFilters,
+    selectionMode,
+    selectedItems,
     setCredentials,
     setCurrentPath,
     loadFiles,
     navigateToFolder,
     navigateBack,
     downloadFile,
+    downloadFolder,
+    downloadSelected,
     hideSnackbar,
     setSearchQuery,
     toggleFilter,
     clearFilters,
     reset,
     openFile,
+    toggleSelectionMode,
+    toggleItemSelection,
+    clearSelection,
+    selectAll,
   } = useFileBrowserStore();
 
   const [showFilters, setShowFilters] = useState(false);
@@ -125,13 +134,26 @@ export const FileBrowserScreen: React.FC = () => {
   };
 
   const onFilePress = (fileName: string, filePath: string) => {
-    // Open file with default app
-    openFile(fileName, filePath);
+    // Check if file is already downloaded
+    const existingDownload = useDownloadStore.getState().downloads.find(
+      d => d.filePath === filePath && d.status === 'completed'
+    );
+    
+    if (existingDownload && existingDownload.localPath) {
+      // File is already downloaded, open it
+      openFile(fileName, filePath);
+    } else {
+      // File not downloaded yet, download it
+      downloadFile(fileName, filePath);
+    }
   };
 
-  const onDownloadPress = (fileName: string, filePath: string) => {
-    // Download to default location
-    downloadFile(fileName, filePath);
+  const onDownloadPress = (fileName: string, filePath: string, isDirectory: boolean) => {
+    if (isDirectory) {
+      downloadFolder(fileName, filePath);
+    } else {
+      downloadFile(fileName, filePath);
+    }
   };
 
   const onBackPress = () => {
@@ -157,7 +179,7 @@ export const FileBrowserScreen: React.FC = () => {
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <View style={styles.headerLeft}>
-            {canGoBack && (
+            {canGoBack && !selectionMode && (
               <TouchableOpacity
                 onPress={onBackPress}
                 style={styles.backButton}
@@ -165,36 +187,77 @@ export const FileBrowserScreen: React.FC = () => {
                 <Icon name="chevron-left" size={24} color={theme.colors.primary} />
               </TouchableOpacity>
             )}
+            {selectionMode && (
+              <TouchableOpacity
+                onPress={() => {
+                  clearSelection();
+                  toggleSelectionMode();
+                }}
+                style={styles.backButton}
+                activeOpacity={0.7}>
+                <Icon name="close" size={24} color={theme.colors.primary} />
+              </TouchableOpacity>
+            )}
             <View style={styles.headerTitleContainer}>
-              <Text style={styles.headerTitle}>{currentFolder}</Text>
-              <Text style={styles.headerSubtitle}>
-                {credentials.host} · {filteredItems.length} of {items.length} items
+              <Text style={styles.headerTitle}>
+                {selectionMode ? `${selectedItems.size} selected` : currentFolder}
               </Text>
+              {!selectionMode && (
+                <Text style={styles.headerSubtitle}>
+                  {credentials.host} · {filteredItems.length} of {items.length} items
+                </Text>
+              )}
             </View>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity
-              onPress={() => setShowFilters(!showFilters)}
-              style={[styles.iconButton, hasActiveFilters && styles.iconButtonActive]}
-              activeOpacity={0.7}>
-              <Icon 
-                name={showFilters ? "filter-off" : "filter-variant"} 
-                size={20} 
-                color={hasActiveFilters ? theme.colors.primary : theme.colors.onSurfaceVariant} 
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('Downloads' as never)}
-              style={styles.iconButton}
-              activeOpacity={0.7}>
-              <Icon name="download" size={20} color={theme.colors.primary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleSignOut}
-              style={styles.iconButton}
-              activeOpacity={0.7}>
-              <Icon name="logout" size={20} color={theme.colors.error} />
-            </TouchableOpacity>
+            {selectionMode ? (
+              <>
+                <TouchableOpacity
+                  onPress={selectAll}
+                  style={styles.iconButton}
+                  activeOpacity={0.7}>
+                  <Icon name="select-all" size={20} color={theme.colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={downloadSelected}
+                  style={[styles.iconButton, selectedItems.size === 0 && styles.iconButtonDisabled]}
+                  activeOpacity={0.7}
+                  disabled={selectedItems.size === 0}>
+                  <Icon name="download" size={20} color={selectedItems.size === 0 ? theme.colors.onSurfaceVariant : theme.colors.primary} />
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <TouchableOpacity
+                  onPress={toggleSelectionMode}
+                  style={styles.iconButton}
+                  activeOpacity={0.7}>
+                  <Icon name="checkbox-multiple-marked-outline" size={20} color={theme.colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setShowFilters(!showFilters)}
+                  style={[styles.iconButton, hasActiveFilters && styles.iconButtonActive]}
+                  activeOpacity={0.7}>
+                  <Icon 
+                    name={showFilters ? "filter-off" : "filter-variant"} 
+                    size={20} 
+                    color={hasActiveFilters ? theme.colors.primary : theme.colors.onSurfaceVariant} 
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('Downloads' as never)}
+                  style={styles.iconButton}
+                  activeOpacity={0.7}>
+                  <Icon name="download" size={20} color={theme.colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleSignOut}
+                  style={styles.iconButton}
+                  activeOpacity={0.7}>
+                  <Icon name="logout" size={20} color={theme.colors.error} />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
 
@@ -260,21 +323,52 @@ export const FileBrowserScreen: React.FC = () => {
     const {iconName, color} = getFileIcon(item.name, item.type);
     const isLast = index === items.length - 1;
     const isDownloading = downloadingFile === item.name;
+    const isSelected = selectedItems.has(item.path);
 
     const handlePress = () => {
-      if (item.type === 'directory') {
+      console.log('[FileBrowser] File item pressed:', item.name, item.type);
+      
+      if (selectionMode) {
+        toggleItemSelection(item.path);
+      } else if (item.type === 'directory') {
         onFolderPress(item.name);
       } else {
         onFilePress(item.name, item.path);
       }
     };
 
+    const handleLongPress = () => {
+      if (!selectionMode) {
+        toggleSelectionMode();
+        toggleItemSelection(item.path);
+      }
+    };
+
+    const handleDownloadPress = () => {
+      console.log('[FileBrowser] Download button pressed:', item.name);
+      onDownloadPress(item.name, item.path, item.type === 'directory');
+    };
+
     return (
       <TouchableOpacity
-        style={[styles.fileItem, !isLast && styles.fileItemBorder]}
+        style={[
+          styles.fileItem, 
+          !isLast && styles.fileItemBorder,
+          isSelected && styles.fileItemSelected
+        ]}
         activeOpacity={0.6}
         onPress={handlePress}
+        onLongPress={handleLongPress}
         disabled={isDownloading}>
+        {selectionMode && (
+          <View style={styles.selectionCheckbox}>
+            <Icon 
+              name={isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'} 
+              size={24} 
+              color={isSelected ? theme.colors.primary : theme.colors.onSurfaceVariant} 
+            />
+          </View>
+        )}
         <View style={[styles.fileIcon, {backgroundColor: color + '20'}]}>
           <Icon name={iconName} size={24} color={color} />
         </View>
@@ -284,16 +378,21 @@ export const FileBrowserScreen: React.FC = () => {
             {item.type === 'directory' ? 'Folder' : formatFileSize(item.size)}
           </Text>
         </View>
-        {item.type === 'directory' && (
+        {!selectionMode && item.type === 'directory' && (
           <Icon name="chevron-right" size={24} color={theme.colors.onSurfaceVariant} />
         )}
-        {item.type === 'file' && !isDownloading && (
+        {!selectionMode && item.type === 'file' && !isDownloading && (
           <TouchableOpacity
             style={styles.downloadButton}
-            onPress={(e) => {
-              e.stopPropagation();
-              onDownloadPress(item.name, item.path);
-            }}
+            onPress={handleDownloadPress}
+            activeOpacity={0.7}>
+            <Icon name="download" size={20} color={theme.colors.primary} />
+          </TouchableOpacity>
+        )}
+        {!selectionMode && item.type === 'directory' && !isDownloading && (
+          <TouchableOpacity
+            style={styles.downloadButton}
+            onPress={handleDownloadPress}
             activeOpacity={0.7}>
             <Icon name="download" size={20} color={theme.colors.primary} />
           </TouchableOpacity>
@@ -430,6 +529,9 @@ const styles = StyleSheet.create({
   iconButtonActive: {
     backgroundColor: theme.colors.primary + '20',
   },
+  iconButtonDisabled: {
+    opacity: 0.5,
+  },
   headerTitle: {
     fontFamily: 'Poppins-SemiBold',
     fontSize: 17,
@@ -507,6 +609,12 @@ const styles = StyleSheet.create({
   fileItemBorder: {
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.outline,
+  },
+  fileItemSelected: {
+    backgroundColor: theme.colors.primary + '10',
+  },
+  selectionCheckbox: {
+    marginRight: 12,
   },
   fileIcon: {
     width: 40,

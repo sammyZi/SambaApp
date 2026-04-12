@@ -8,3 +8,11 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # Add any project specific keep options here:
+-keep class com.hierynomus.** { *; }
+-keep class org.bouncycastle.** { *; }
+-keep class net.engio.mbassy.** { *; }
+
+# React Native specific rules
+-keep class com.facebook.react.turbomodule.** { *; }
+-keep class * extends com.facebook.react.bridge.JavaScriptModule { *; }
+-keep class * extends com.facebook.react.uimanager.ViewManager { *; }

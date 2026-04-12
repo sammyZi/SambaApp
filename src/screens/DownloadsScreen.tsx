@@ -1,31 +1,65 @@
-import React from 'react';
-import {View, StyleSheet, FlatList, TouchableOpacity} from 'react-native';
+import React, {useEffect, useMemo, useCallback} from 'react';
+import {View, StyleSheet, FlatList, TouchableOpacity, BackHandler} from 'react-native';
 import {Text, ProgressBar, IconButton} from 'react-native-paper';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import FileViewer from 'react-native-file-viewer';
 import {useDownloadStore, DownloadItem} from '../stores/useDownloadStore';
 import {theme} from '../theme';
+import {useNavigation} from '@react-navigation/native';
 
 export const DownloadsScreen: React.FC = () => {
-  const {downloads, pauseDownload, resumeDownload, cancelDownload, clearCompleted} = useDownloadStore();
+  const navigation = useNavigation();
+  const {downloads, pauseDownload, resumeDownload, cancelDownload, clearCompleted, clearInProgressDownloads} = useDownloadStore();
 
-  const formatSpeed = (bytesPerSecond: number): string => {
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        navigation.goBack();
+        return true; // Prevent default behavior
+      },
+    );
+
+    return () => backHandler.remove();
+  }, [navigation]);
+
+  // Clear in-progress downloads on mount (they can't continue after app restart)
+  useEffect(() => {
+    clearInProgressDownloads();
+  }, []);
+
+  const formatSpeed = useCallback((bytesPerSecond: number): string => {
     if (bytesPerSecond < 1024) return `${bytesPerSecond.toFixed(0)} B/s`;
     if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
     return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
-  };
+  }, []);
 
-  const formatSize = (bytes: number): string => {
+  const formatSize = useCallback((bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  };
+  }, []);
 
-  const formatETA = (seconds: number): string => {
+  const formatETA = useCallback((seconds: number): string => {
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-  };
+  }, []);
+
+  const handleOpenFile = useCallback(async (item: DownloadItem) => {
+    if (item.status === 'completed' && item.localPath) {
+      try {
+        await FileViewer.open(item.localPath, {
+          showOpenWithDialog: true,
+          showAppsSuggestions: true,
+        });
+      } catch (error) {
+        console.error('Error opening file:', error);
+      }
+    }
+  }, []);
 
   const renderDownloadItem = ({item}: {item: DownloadItem}) => {
     const progress = item.totalBytes > 0 ? item.downloadedBytes / item.totalBytes : 0;
@@ -35,7 +69,11 @@ export const DownloadsScreen: React.FC = () => {
     const isFailed = item.status === 'failed';
 
     return (
-      <View style={styles.downloadItem}>
+      <TouchableOpacity 
+        style={styles.downloadItem}
+        onPress={() => handleOpenFile(item)}
+        disabled={!isCompleted}
+        activeOpacity={isCompleted ? 0.7 : 1}>
         <View style={styles.downloadHeader}>
           <View style={styles.fileIconContainer}>
             <Icon 
@@ -122,18 +160,41 @@ export const DownloadsScreen: React.FC = () => {
             <Text style={styles.failedText}>{item.error || 'Download failed'}</Text>
           </View>
         )}
-      </View>
+      </TouchableOpacity>
     );
   };
 
-  const activeDownloads = downloads.filter((d: DownloadItem) => d.status === 'downloading' || d.status === 'paused');
-  const completedDownloads = downloads.filter((d: DownloadItem) => d.status === 'completed');
-  const failedDownloads = downloads.filter((d: DownloadItem) => d.status === 'failed');
+  const activeDownloads = useMemo(() => 
+    downloads.filter((d: DownloadItem) => d.status === 'downloading' || d.status === 'paused'),
+    [downloads]
+  );
+  
+  const completedDownloads = useMemo(() => 
+    downloads.filter((d: DownloadItem) => d.status === 'completed'),
+    [downloads]
+  );
+  
+  const failedDownloads = useMemo(() => 
+    downloads.filter((d: DownloadItem) => d.status === 'failed'),
+    [downloads]
+  );
+
+  const sortedDownloads = useMemo(() => 
+    [...activeDownloads, ...failedDownloads, ...completedDownloads],
+    [activeDownloads, failedDownloads, completedDownloads]
+  );
+
+  const keyExtractor = useCallback((item: DownloadItem) => item.id, []);
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Downloads</Text>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Icon name="arrow-left" size={24} color={theme.colors.onSurface} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Downloads</Text>
+        </View>
         {completedDownloads.length > 0 && (
           <TouchableOpacity onPress={clearCompleted} style={styles.clearButton}>
             <Text style={styles.clearButtonText}>Clear Completed</Text>
@@ -148,11 +209,15 @@ export const DownloadsScreen: React.FC = () => {
         </View>
       ) : (
         <FlatList
-          data={[...activeDownloads, ...failedDownloads, ...completedDownloads]}
+          data={sortedDownloads}
           renderItem={renderDownloadItem}
-          keyExtractor={(item) => item.id}
+          keyExtractor={keyExtractor}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={5}
+          updateCellsBatchingPeriod={100}
+          windowSize={5}
         />
       )}
     </View>
@@ -173,6 +238,14 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.outline,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  backButton: {
+    marginRight: 12,
   },
   headerTitle: {
     fontFamily: 'Poppins-SemiBold',

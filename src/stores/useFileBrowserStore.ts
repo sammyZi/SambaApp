@@ -24,6 +24,10 @@ interface FileBrowserState {
   // Search and filter state
   searchQuery: string;
   activeFilters: FileTypeFilter[];
+  
+  // Selection state
+  selectionMode: boolean;
+  selectedItems: Set<string>; // file paths
 
   // Actions
   setCredentials: (credentials: SmbCredentials) => void;
@@ -35,6 +39,8 @@ interface FileBrowserState {
   navigateToFolder: (folderName: string) => void;
   navigateBack: () => boolean;
   downloadFile: (fileName: string, filePath: string) => Promise<void>;
+  downloadFolder: (folderName: string, folderPath: string) => Promise<void>;
+  downloadSelected: () => Promise<void>;
   openFile: (fileName: string, filePath: string) => Promise<void>;
   showSnackbar: (message: string, type: 'success' | 'error') => void;
   hideSnackbar: () => void;
@@ -42,6 +48,10 @@ interface FileBrowserState {
   toggleFilter: (filter: FileTypeFilter) => void;
   clearFilters: () => void;
   applyFilters: () => void;
+  toggleSelectionMode: () => void;
+  toggleItemSelection: (filePath: string) => void;
+  clearSelection: () => void;
+  selectAll: () => void;
   reset: () => void;
 }
 
@@ -122,6 +132,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   snackbarType: 'success',
   searchQuery: '',
   activeFilters: [],
+  selectionMode: false,
+  selectedItems: new Set(),
 
   // Actions
   setCredentials: (credentials) => set({credentials}),
@@ -199,6 +211,20 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     const {credentials, showSnackbar} = get();
     if (!credentials) return;
 
+    // Check if file is already being downloaded or completed
+    const existingDownload = useDownloadStore.getState().downloads.find(
+      d => d.filePath === filePath && (d.status === 'downloading' || d.status === 'completed')
+    );
+    
+    if (existingDownload) {
+      if (existingDownload.status === 'completed') {
+        showSnackbar(`${fileName} already downloaded`, 'success');
+      } else {
+        showSnackbar(`${fileName} is already downloading`, 'error');
+      }
+      return;
+    }
+
     // Get file size first by listing the parent directory
     const pathParts = filePath.split('/');
     const parentPath = pathParts.slice(0, -1).join('/');
@@ -224,6 +250,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
         totalBytes: fileSize,
       });
 
+      showSnackbar(`Downloading ${fileName}...`, 'success');
+
       // Set up progress listener
       const eventEmitter = new NativeEventEmitter(NativeModules.SmbModule);
       const subscription = eventEmitter.addListener('downloadProgress', (event) => {
@@ -247,7 +275,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
           downloadId,
         );
         
-        useDownloadStore.getState().completeDownload(downloadId);
+        // Update the download with the local path
+        useDownloadStore.getState().completeDownload(downloadId, localFilePath);
         showSnackbar(`Downloaded: ${fileName}`, 'success');
       } catch (err: any) {
         const errorMessage = mapErrorToMessage(err);
@@ -262,10 +291,71 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     }
   },
 
+  downloadFolder: async (folderName, folderPath) => {
+    const {credentials, showSnackbar} = get();
+    if (!credentials) return;
+
+    showSnackbar(`Downloading folder: ${folderName}...`, 'success');
+
+    try {
+      // List all files in the folder
+      const files = await SmbModule.listFiles(
+        credentials.host,
+        credentials.shareName,
+        folderPath,
+        credentials.username,
+        credentials.password,
+        credentials.domain || null,
+      );
+
+      const filesToDownload = files.filter(f => f.type === 'file');
+      
+      if (filesToDownload.length === 0) {
+        showSnackbar('Folder is empty', 'error');
+        return;
+      }
+
+      showSnackbar(`Downloading ${filesToDownload.length} files from ${folderName}...`, 'success');
+
+      // Download each file
+      for (const file of filesToDownload) {
+        await get().downloadFile(file.name, file.path);
+      }
+    } catch (err: any) {
+      const errorMessage = mapErrorToMessage(err);
+      showSnackbar(errorMessage, 'error');
+    }
+  },
+
+  downloadSelected: async () => {
+    const {selectedItems, items, clearSelection, showSnackbar} = get();
+    
+    if (selectedItems.size === 0) {
+      showSnackbar('No items selected', 'error');
+      return;
+    }
+
+    showSnackbar(`Downloading ${selectedItems.size} items...`, 'success');
+
+    for (const itemPath of selectedItems) {
+      const item = items.find(i => i.path === itemPath);
+      if (item) {
+        if (item.type === 'directory') {
+          await get().downloadFolder(item.name, item.path);
+        } else {
+          await get().downloadFile(item.name, item.path);
+        }
+      }
+    }
+
+    clearSelection();
+  },
+
   openFile: async (fileName, filePath) => {
     const {credentials, showSnackbar} = get();
     if (!credentials) return;
 
+    console.log('[FileBrowser] openFile called for:', fileName);
     set({downloadingFile: fileName});
 
     try {
@@ -335,6 +425,34 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     set({filteredItems: filtered});
   },
 
+  toggleSelectionMode: () => {
+    const {selectionMode} = get();
+    set({selectionMode: !selectionMode, selectedItems: new Set()});
+  },
+
+  toggleItemSelection: (filePath) => {
+    const {selectedItems} = get();
+    const newSelection = new Set(selectedItems);
+    
+    if (newSelection.has(filePath)) {
+      newSelection.delete(filePath);
+    } else {
+      newSelection.add(filePath);
+    }
+    
+    set({selectedItems: newSelection});
+  },
+
+  clearSelection: () => {
+    set({selectedItems: new Set(), selectionMode: false});
+  },
+
+  selectAll: () => {
+    const {filteredItems} = get();
+    const allPaths = new Set(filteredItems.map(item => item.path));
+    set({selectedItems: allPaths});
+  },
+
   reset: () =>
     set({
       credentials: null,
@@ -350,5 +468,7 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       snackbarType: 'success',
       searchQuery: '',
       activeFilters: [],
+      selectionMode: false,
+      selectedItems: new Set(),
     }),
 }));
