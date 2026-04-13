@@ -26,3 +26,18 @@ A React Native Android application for browsing and downloading files from Samba
 - **Kotlin** for native Android Modules
 - **SMBJ Library** for SMB protocol support
 
+## How It Works Under the Hood
+
+To achieve reliable SMB connectivity, this app bypasses generic JavaScript libraries and uses a custom **React Native Bridge** connecting to the native Android layer.
+
+1. **The Native Module (`SmbModule.kt`)**
+   We created a Kotlin module extending `ReactContextBaseJavaModule`. This allows our TypeScript code to invoke Android-native functions asynchronously.
+2. **The SMBJ Engine**
+   Under the hood, the application relies on the [SMBJ](https://github.com/hierynomus/smbj) library—a robust, pure Java implementation of the SMB2/SMB3 protocol. 
+   When the user browses a folder or downloads a file:
+   - The Kotlin module spawns a background thread using `Executors.newCachedThreadPool()` to prevent blocking the UI.
+   - It instantiates an `SMBClient`, connects via socket to the provided host, and authenticates using an `AuthenticationContext`.
+   - It mounts the specific `DiskShare` and either iterates through `share.list(path)` for file browsing, or streams file chunks to `FileOutputStream` for downloading.
+3. **The React Native Bridge (`SmbModule.ts`)**
+   The Kotlin methods (`@ReactMethod`) are exposed to the TypeScript layer via `NativeModules.SmbModule`, taking care of passing arguments (host, share, credentials) and resolving Promises with the results (file lists or local download paths).
+
