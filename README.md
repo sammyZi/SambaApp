@@ -2,6 +2,16 @@
 
 A React Native Android application for browsing and downloading files from Samba (SMB) network shares.
 
+## Screenshots
+
+<p align="center">
+  <img src="ss/Screenshot_20260412_163029.jpg.jpeg" width="30%" />
+  <img src="ss/Screenshot_20260412_163034.jpg.jpeg" width="30%" />
+  <img src="ss/Screenshot_20260412_163052.jpg.jpeg" width="30%" />
+  <img src="ss/Screenshot_20260412_163101.jpg.jpeg" width="30%" />
+  <img src="ss/Screenshot_20260412_163106.jpg.jpeg" width="30%" />
+</p>
+
 ## Project Structure
 
 This is a bare React Native project (not Expo) configured for Android-only development.
@@ -86,14 +96,4 @@ The project structure is set up. Subsequent tasks will:
 3. Build UI components
 4. Add navigation
 5. Implement file browsing and download features
-
-## Screenshots
-
-<p align="center">
-  <img src="ss/Screenshot_20260412_163029.jpg.jpeg" width="30%" />
-  <img src="ss/Screenshot_20260412_163034.jpg.jpeg" width="30%" />
-  <img src="ss/Screenshot_20260412_163052.jpg.jpeg" width="30%" />
-  <img src="ss/Screenshot_20260412_163101.jpg.jpeg" width="30%" />
-  <img src="ss/Screenshot_20260412_163106.jpg.jpeg" width="30%" />
-</p>
 
