@@ -1,5 +1,12 @@
-import React, {useEffect, useMemo, useCallback} from 'react';
-import {View, StyleSheet, FlatList, TouchableOpacity, BackHandler} from 'react-native';
+import React, {useEffect, useMemo, useCallback, useState} from 'react';
+import {
+  View,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  BackHandler,
+  Alert,
+} from 'react-native';
 import {Text, ProgressBar, IconButton} from 'react-native-paper';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import FileViewer from 'react-native-file-viewer';
@@ -7,35 +14,68 @@ import {useDownloadStore, DownloadItem} from '../stores/useDownloadStore';
 import {theme} from '../theme';
 import {useNavigation} from '@react-navigation/native';
 
+// Map file extension → icon name + colour
+const getFileIcon = (fileName: string): {icon: string; color: string} => {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  switch (ext) {
+    case 'mp3': case 'wav': case 'flac': case 'aac': case 'ogg': case 'm4a':
+      return {icon: 'music', color: '#3B6B9C'};
+    case 'mp4': case 'mkv': case 'avi': case 'mov': case 'wmv':
+      return {icon: 'video', color: '#E06B65'};
+    case 'jpg': case 'jpeg': case 'png': case 'gif': case 'webp': case 'bmp':
+      return {icon: 'image', color: '#7B68EE'};
+    case 'pdf':
+      return {icon: 'file-pdf-box', color: '#C0392B'};
+    case 'doc': case 'docx':
+      return {icon: 'file-word', color: '#2E86C1'};
+    case 'xls': case 'xlsx':
+      return {icon: 'file-excel', color: '#27AE60'};
+    case 'zip': case 'rar': case '7z': case 'tar': case 'gz':
+      return {icon: 'folder-zip', color: '#8D6E63'};
+    case 'txt': case 'md': case 'log':
+      return {icon: 'file-document', color: '#7E8A96'};
+    default:
+      return {icon: 'file', color: '#7E8A96'};
+  }
+};
+
 export const DownloadsScreen: React.FC = () => {
   const navigation = useNavigation();
-  const {downloads, pauseDownload, resumeDownload, cancelDownload, clearCompleted, clearInProgressDownloads} = useDownloadStore();
+  const {
+    downloads,
+    pauseDownload,
+    resumeDownload,
+    cancelDownload,
+    deleteDownload,
+    clearCompleted,
+    clearInProgressDownloads,
+  } = useDownloadStore();
+
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Handle Android back button
   useEffect(() => {
-    const backHandler = BackHandler.addEventListener(
-      'hardwareBackPress',
-      () => {
-        navigation.goBack();
-        return true; // Prevent default behavior
-      },
-    );
-
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      navigation.goBack();
+      return true;
+    });
     return () => backHandler.remove();
   }, [navigation]);
 
-  // Clear in-progress downloads on mount (they can't continue after app restart)
+  // Mark in-progress downloads as failed on mount (can't resume after restart)
   useEffect(() => {
     clearInProgressDownloads();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const formatSpeed = useCallback((bytesPerSecond: number): string => {
-    if (bytesPerSecond < 1024) return `${bytesPerSecond.toFixed(0)} B/s`;
-    if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
-    return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+  // ─── formatters ────────────────────────────────────────────────────────────
+  const formatSpeed = useCallback((bps: number): string => {
+    if (bps < 1024) return `${bps.toFixed(0)} B/s`;
+    if (bps < 1024 * 1024) return `${(bps / 1024).toFixed(1)} KB/s`;
+    return `${(bps / (1024 * 1024)).toFixed(1)} MB/s`;
   }, []);
 
   const formatSize = useCallback((bytes: number): string => {
+    if (bytes === 0) return '0 B';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -48,164 +88,267 @@ export const DownloadsScreen: React.FC = () => {
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   }, []);
 
+  // ─── open a completed file ──────────────────────────────────────────────────
   const handleOpenFile = useCallback(async (item: DownloadItem) => {
-    if (item.status === 'completed' && item.localPath) {
-      try {
-        await FileViewer.open(item.localPath, {
-          showOpenWithDialog: true,
-          showAppsSuggestions: true,
-        });
-      } catch (error) {
-        console.error('Error opening file:', error);
-      }
+    if (item.status !== 'completed' || !item.localPath) return;
+    try {
+      await FileViewer.open(item.localPath, {
+        showOpenWithDialog: true,
+        showAppsSuggestions: true,
+      });
+    } catch (err) {
+      console.error('[Downloads] Error opening file:', err);
     }
   }, []);
 
-  const renderDownloadItem = ({item}: {item: DownloadItem}) => {
-    const progress = item.totalBytes > 0 ? item.downloadedBytes / item.totalBytes : 0;
-    const isActive = item.status === 'downloading';
-    const isPaused = item.status === 'paused';
-    const isCompleted = item.status === 'completed';
-    const isFailed = item.status === 'failed';
+  // ─── delete a single file ───────────────────────────────────────────────────
+  const handleDelete = useCallback(
+    (item: DownloadItem) => {
+      Alert.alert(
+        'Delete file',
+        `Remove "${item.fileName}" from device storage?`,
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              setDeletingId(item.id);
+              await deleteDownload(item.id);
+              setDeletingId(null);
+            },
+          },
+        ],
+      );
+    },
+    [deleteDownload],
+  );
 
-    return (
-      <TouchableOpacity 
-        style={styles.downloadItem}
-        onPress={() => handleOpenFile(item)}
-        disabled={!isCompleted}
-        activeOpacity={isCompleted ? 0.7 : 1}>
-        <View style={styles.downloadHeader}>
-          <View style={styles.fileIconContainer}>
-            <Icon 
-              name={isCompleted ? 'check-circle' : isFailed ? 'alert-circle' : 'file-download'} 
-              size={24} 
-              color={isCompleted ? theme.colors.primary : isFailed ? theme.colors.error : theme.colors.onSurfaceVariant} 
-            />
-          </View>
-          <View style={styles.downloadInfo}>
-            <Text style={styles.fileName} numberOfLines={1}>{item.fileName}</Text>
-            <Text style={styles.fileSize}>
-              {formatSize(item.downloadedBytes)} / {formatSize(item.totalBytes)}
-            </Text>
-          </View>
-          <View style={styles.downloadActions}>
-            {isActive && (
-              <IconButton
-                icon="pause"
-                size={20}
-                onPress={() => pauseDownload(item.id)}
-                iconColor={theme.colors.primary}
-              />
-            )}
-            {isPaused && (
-              <IconButton
-                icon="play"
-                size={20}
-                onPress={() => resumeDownload(item.id)}
-                iconColor={theme.colors.primary}
-              />
-            )}
-            <IconButton
-              icon="close"
-              size={20}
-              onPress={() => cancelDownload(item.id)}
-              iconColor={theme.colors.error}
-            />
-          </View>
-        </View>
-
-        {!isCompleted && !isFailed && (
-          <>
-            <ProgressBar 
-              progress={progress} 
-              color={isPaused ? theme.colors.onSurfaceVariant : theme.colors.primary}
-              style={styles.progressBar}
-            />
-            <View style={styles.downloadStats}>
-              <Text style={styles.statsText}>
-                {(progress * 100).toFixed(1)}%
-              </Text>
-              {isActive && (
-                <>
-                  <Text style={styles.statsText}>•</Text>
-                  <Text style={styles.statsText}>
-                    {formatSpeed(item.speed)}
-                  </Text>
-                  <Text style={styles.statsText}>•</Text>
-                  <Text style={styles.statsText}>
-                    ETA: {formatETA(item.eta)}
-                  </Text>
-                </>
-              )}
-              {isPaused && (
-                <>
-                  <Text style={styles.statsText}>•</Text>
-                  <Text style={styles.statsText}>Paused</Text>
-                </>
-              )}
-            </View>
-          </>
-        )}
-
-        {isCompleted && (
-          <View style={styles.completedContainer}>
-            <Icon name="check" size={16} color={theme.colors.primary} />
-            <Text style={styles.completedText}>Download completed</Text>
-          </View>
-        )}
-
-        {isFailed && (
-          <View style={styles.failedContainer}>
-            <Icon name="alert" size={16} color={theme.colors.error} />
-            <Text style={styles.failedText}>{item.error || 'Download failed'}</Text>
-          </View>
-        )}
-      </TouchableOpacity>
+  // ─── delete all completed ───────────────────────────────────────────────────
+  const handleClearCompleted = useCallback(() => {
+    Alert.alert(
+      'Delete all completed',
+      'Remove all completed downloads from device storage?',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Delete all',
+          style: 'destructive',
+          onPress: () => clearCompleted(),
+        },
+      ],
     );
-  };
+  }, [clearCompleted]);
 
-  const activeDownloads = useMemo(() => 
-    downloads.filter((d: DownloadItem) => d.status === 'downloading' || d.status === 'paused'),
-    [downloads]
-  );
-  
-  const completedDownloads = useMemo(() => 
-    downloads.filter((d: DownloadItem) => d.status === 'completed'),
-    [downloads]
-  );
-  
-  const failedDownloads = useMemo(() => 
-    downloads.filter((d: DownloadItem) => d.status === 'failed'),
-    [downloads]
+  // ─── render one download item ───────────────────────────────────────────────
+  const renderDownloadItem = useCallback(
+    ({item}: {item: DownloadItem}) => {
+      const progress = item.totalBytes > 0 ? item.downloadedBytes / item.totalBytes : 0;
+      const isActive = item.status === 'downloading';
+      const isPaused = item.status === 'paused';
+      const isCompleted = item.status === 'completed';
+      const isFailed = item.status === 'failed';
+      const isBeingDeleted = deletingId === item.id;
+      const {icon, color} = getFileIcon(item.fileName);
+
+      return (
+        <TouchableOpacity
+          style={[styles.downloadItem, isBeingDeleted && styles.downloadItemFading]}
+          onPress={() => handleOpenFile(item)}
+          disabled={!isCompleted || isBeingDeleted}
+          activeOpacity={isCompleted ? 0.7 : 1}>
+          {/* File icon */}
+          <View style={[styles.fileIconContainer, {backgroundColor: color + '20'}]}>
+            <Icon
+              name={
+                isCompleted
+                  ? icon
+                  : isFailed
+                  ? 'alert-circle'
+                  : 'file-download-outline'
+              }
+              size={24}
+              color={isFailed ? theme.colors.error : color}
+            />
+          </View>
+
+          {/* Info + actions */}
+          <View style={styles.downloadBody}>
+            {/* Row 1: name + action buttons */}
+            <View style={styles.downloadHeader}>
+              <Text style={styles.fileName} numberOfLines={1}>
+                {item.fileName}
+              </Text>
+              <View style={styles.downloadActions}>
+                {isActive && (
+                  <IconButton
+                    icon="pause"
+                    size={18}
+                    onPress={() => pauseDownload(item.id)}
+                    iconColor={theme.colors.primary}
+                    style={styles.actionBtn}
+                  />
+                )}
+                {isPaused && (
+                  <IconButton
+                    icon="play"
+                    size={18}
+                    onPress={() => resumeDownload(item.id)}
+                    iconColor={theme.colors.primary}
+                    style={styles.actionBtn}
+                  />
+                )}
+                {/* Active/paused: cancel (removes entry, native keeps writing but we ignore it) */}
+                {(isActive || isPaused) && (
+                  <IconButton
+                    icon="close"
+                    size={18}
+                    onPress={() => cancelDownload(item.id)}
+                    iconColor={theme.colors.error}
+                    style={styles.actionBtn}
+                  />
+                )}
+                {/* Completed/failed: trash icon deletes file from disk */}
+                {(isCompleted || isFailed) && (
+                  <IconButton
+                    icon="trash-can-outline"
+                    size={18}
+                    onPress={() => handleDelete(item)}
+                    iconColor={theme.colors.error}
+                    style={styles.actionBtn}
+                    disabled={isBeingDeleted}
+                  />
+                )}
+              </View>
+            </View>
+
+            {/* Row 2: size */}
+            <Text style={styles.fileSize}>
+              {isCompleted
+                ? formatSize(item.totalBytes)
+                : `${formatSize(item.downloadedBytes)} / ${formatSize(item.totalBytes)}`}
+            </Text>
+
+            {/* Progress bar for active / paused */}
+            {(isActive || isPaused) && (
+              <>
+                <ProgressBar
+                  progress={progress}
+                  color={isPaused ? theme.colors.onSurfaceVariant : theme.colors.primary}
+                  style={styles.progressBar}
+                />
+                <View style={styles.downloadStats}>
+                  <Text style={styles.statsText}>{(progress * 100).toFixed(1)}%</Text>
+                  {isActive && item.speed > 0 && (
+                    <>
+                      <Text style={styles.statsDot}>•</Text>
+                      <Text style={styles.statsText}>{formatSpeed(item.speed)}</Text>
+                      <Text style={styles.statsDot}>•</Text>
+                      <Text style={styles.statsText}>ETA {formatETA(item.eta)}</Text>
+                    </>
+                  )}
+                  {isPaused && (
+                    <>
+                      <Text style={styles.statsDot}>•</Text>
+                      <Text style={styles.statsText}>Paused</Text>
+                    </>
+                  )}
+                </View>
+              </>
+            )}
+
+            {/* Status row for completed */}
+            {isCompleted && (
+              <View style={styles.statusRow}>
+                <Icon name="check-circle" size={13} color={theme.colors.primary} />
+                <Text style={styles.completedText}>Saved · tap to open</Text>
+              </View>
+            )}
+
+            {/* Status row for failed */}
+            {isFailed && (
+              <View style={styles.statusRow}>
+                <Icon name="alert" size={13} color={theme.colors.error} />
+                <Text style={styles.failedText}>{item.error ?? 'Download failed'}</Text>
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
+      );
+    },
+    [
+      deletingId,
+      handleOpenFile,
+      handleDelete,
+      pauseDownload,
+      resumeDownload,
+      cancelDownload,
+      formatSize,
+      formatSpeed,
+      formatETA,
+    ],
   );
 
-  const sortedDownloads = useMemo(() => 
-    [...activeDownloads, ...failedDownloads, ...completedDownloads],
-    [activeDownloads, failedDownloads, completedDownloads]
+  // ─── sorted lists ───────────────────────────────────────────────────────────
+  const activeDownloads = useMemo(
+    () => downloads.filter(d => d.status === 'downloading' || d.status === 'paused'),
+    [downloads],
+  );
+  const completedDownloads = useMemo(
+    () => downloads.filter(d => d.status === 'completed'),
+    [downloads],
+  );
+  const failedDownloads = useMemo(
+    () => downloads.filter(d => d.status === 'failed'),
+    [downloads],
+  );
+  const sortedDownloads = useMemo(
+    () => [...activeDownloads, ...failedDownloads, ...completedDownloads],
+    [activeDownloads, failedDownloads, completedDownloads],
   );
 
   const keyExtractor = useCallback((item: DownloadItem) => item.id, []);
 
+  // Total size of completed files on disk
+  const cachedSize = useMemo(
+    () => completedDownloads.reduce((acc, d) => acc + (d.totalBytes ?? 0), 0),
+    [completedDownloads],
+  );
+
+  // ─── render ─────────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
+      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <Icon name="arrow-left" size={24} color={theme.colors.onSurface} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Downloads</Text>
+          <View>
+            <Text style={styles.headerTitle}>Downloads</Text>
+            {cachedSize > 0 && (
+              <Text style={styles.headerSubtitle}>
+                {completedDownloads.length} file{completedDownloads.length !== 1 ? 's' : ''} · {formatSize(cachedSize)} on device
+              </Text>
+            )}
+          </View>
         </View>
         {completedDownloads.length > 0 && (
-          <TouchableOpacity onPress={clearCompleted} style={styles.clearButton}>
-            <Text style={styles.clearButtonText}>Clear Completed</Text>
+          <TouchableOpacity onPress={handleClearCompleted} style={styles.deleteAllButton}>
+            <Icon name="trash-can-outline" size={16} color={theme.colors.error} />
+            <Text style={styles.deleteAllText}>Delete all</Text>
           </TouchableOpacity>
         )}
       </View>
 
+      {/* List or empty state */}
       {downloads.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Icon name="download-off" size={64} color={theme.colors.onSurfaceVariant} />
           <Text style={styles.emptyText}>No downloads yet</Text>
+          <Text style={styles.emptySubText}>
+            Tap any file to stream-open it.{'\n'}It gets saved here automatically.
+          </Text>
         </View>
       ) : (
         <FlatList
@@ -214,10 +357,9 @@ export const DownloadsScreen: React.FC = () => {
           keyExtractor={keyExtractor}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
-          removeClippedSubviews={true}
-          maxToRenderPerBatch={5}
-          updateCellsBatchingPeriod={100}
-          windowSize={5}
+          removeClippedSubviews
+          maxToRenderPerBatch={6}
+          windowSize={7}
         />
       )}
     </View>
@@ -234,7 +376,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingVertical: 14,
     backgroundColor: theme.colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.outline,
@@ -245,114 +387,146 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   backButton: {
-    marginRight: 12,
+    marginRight: 14,
   },
   headerTitle: {
     fontFamily: 'Poppins-SemiBold',
     fontSize: 20,
     color: theme.colors.onSurface,
   },
-  clearButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: theme.colors.surfaceVariant,
+  headerSubtitle: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 11,
+    color: theme.colors.onSurfaceVariant,
+    marginTop: 1,
   },
-  clearButtonText: {
+  deleteAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.error + '60',
+    backgroundColor: theme.colors.error + '10',
+  },
+  deleteAllText: {
     fontFamily: 'Poppins-Medium',
     fontSize: 12,
-    color: theme.colors.primary,
+    color: theme.colors.error,
   },
   listContent: {
     padding: 16,
   },
   downloadItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     backgroundColor: theme.colors.surface,
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: theme.colors.outline,
   },
-  downloadHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
+  downloadItemFading: {
+    opacity: 0.4,
   },
   fileIconContainer: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     borderRadius: 10,
-    backgroundColor: theme.colors.surfaceVariant,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+    marginTop: 2,
   },
-  downloadInfo: {
+  downloadBody: {
     flex: 1,
   },
-  fileName: {
-    fontFamily: 'Poppins-Medium',
-    fontSize: 14,
-    color: theme.colors.onSurface,
-    marginBottom: 4,
+  downloadHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
   },
-  fileSize: {
-    fontFamily: 'Poppins-Regular',
-    fontSize: 12,
-    color: theme.colors.onSurfaceVariant,
+  fileName: {
+    flex: 1,
+    fontFamily: 'Poppins-Medium',
+    fontSize: 13,
+    color: theme.colors.onSurface,
   },
   downloadActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginLeft: 4,
+  },
+  actionBtn: {
+    margin: 0,
+    width: 32,
+    height: 32,
+  },
+  fileSize: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 11,
+    color: theme.colors.onSurfaceVariant,
+    marginBottom: 8,
   },
   progressBar: {
-    height: 6,
+    height: 5,
     borderRadius: 3,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   downloadStats: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 4,
   },
   statsText: {
     fontFamily: 'Poppins-Regular',
     fontSize: 11,
     color: theme.colors.onSurfaceVariant,
   },
-  completedContainer: {
+  statsDot: {
+    fontFamily: 'Poppins-Regular',
+    fontSize: 11,
+    color: theme.colors.onSurfaceVariant,
+  },
+  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
+    gap: 5,
+    marginTop: 2,
   },
   completedText: {
     fontFamily: 'Poppins-Regular',
-    fontSize: 12,
+    fontSize: 11,
     color: theme.colors.primary,
-  },
-  failedContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
   },
   failedText: {
     fontFamily: 'Poppins-Regular',
-    fontSize: 12,
+    fontSize: 11,
     color: theme.colors.error,
+    flexShrink: 1,
   },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: 40,
   },
   emptyText: {
+    fontFamily: 'Poppins-SemiBold',
+    fontSize: 16,
+    color: theme.colors.onSurface,
+    marginTop: 20,
+  },
+  emptySubText: {
     fontFamily: 'Poppins-Regular',
-    fontSize: 14,
+    fontSize: 13,
     color: theme.colors.onSurfaceVariant,
-    marginTop: 16,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 20,
   },
 });

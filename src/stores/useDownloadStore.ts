@@ -1,6 +1,7 @@
 import {create} from 'zustand';
 import {persist, createJSONStorage, StateStorage} from 'zustand/middleware';
 import EncryptedStorage from 'react-native-encrypted-storage';
+import {SmbModule} from '../native/SmbModule';
 
 // Create a storage adapter for EncryptedStorage
 const encryptedStorageAdapter: StateStorage = {
@@ -53,7 +54,10 @@ interface DownloadState {
   cancelDownload: (id: string) => void;
   completeDownload: (id: string, localPath?: string) => void;
   failDownload: (id: string, error: string) => void;
-  clearCompleted: () => void;
+  /** Delete the local file from disk and remove the entry from the store. */
+  deleteDownload: (id: string) => Promise<void>;
+  /** Delete all completed entries and their local files from disk. */
+  clearCompleted: () => Promise<void>;
   getDownload: (id: string) => DownloadItem | undefined;
   clearInProgressDownloads: () => void;
 }
@@ -64,7 +68,7 @@ export const useDownloadStore = create<DownloadState>()(
       downloads: [],
 
       addDownload: (download) => {
-        const id = `download_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const id = `download_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
         const now = Date.now();
         const newDownload: DownloadItem = {
           ...download,
@@ -139,6 +143,31 @@ export const useDownloadStore = create<DownloadState>()(
         }));
       },
 
+      deleteDownload: async (id) => {
+        const download = get().downloads.find(d => d.id === id);
+        if (download?.localPath) {
+          try {
+            await SmbModule.deleteFile(download.localPath);
+          } catch (err) {
+            console.warn('[DownloadStore] Failed to delete file:', err);
+          }
+        }
+        set((state) => ({
+          downloads: state.downloads.filter(d => d.id !== id),
+        }));
+      },
+
+      clearCompleted: async () => {
+        const completed = get().downloads.filter(d => d.status === 'completed' && d.localPath);
+        // Delete all local files in parallel, ignore individual errors
+        await Promise.allSettled(
+          completed.map(d => d.localPath ? SmbModule.deleteFile(d.localPath).catch(() => {}) : Promise.resolve()),
+        );
+        set((state) => ({
+          downloads: state.downloads.filter(d => d.status !== 'completed'),
+        }));
+      },
+
       completeDownload: (id, localPath?: string) => {
         set((state) => ({
           downloads: state.downloads.map((download) => {
@@ -160,12 +189,6 @@ export const useDownloadStore = create<DownloadState>()(
           downloads: state.downloads.map((download) =>
             download.id === id ? {...download, status: 'failed' as const, error} : download
           ),
-        }));
-      },
-
-      clearCompleted: () => {
-        set((state) => ({
-          downloads: state.downloads.filter((download) => download.status !== 'completed'),
         }));
       },
 

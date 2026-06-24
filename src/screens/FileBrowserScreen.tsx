@@ -17,7 +17,6 @@ import {theme} from '../theme';
 import {RootStackParamList} from '../navigation';
 import {clearCredentials} from '../utils/credentialStore';
 import {useFileBrowserStore, FileTypeFilter} from '../stores/useFileBrowserStore';
-import {useDownloadStore} from '../stores/useDownloadStore';
 
 type FileBrowserRouteProp = RouteProp<RootStackParamList, 'FileBrowser'>;
 
@@ -72,6 +71,7 @@ export const FileBrowserScreen: React.FC = () => {
     items,
     filteredItems,
     isLoading,
+    isSearching,
     error,
     downloadingFile,
     snackbarVisible,
@@ -134,18 +134,9 @@ export const FileBrowserScreen: React.FC = () => {
   };
 
   const onFilePress = (fileName: string, filePath: string) => {
-    // Check if file is already downloaded
-    const existingDownload = useDownloadStore.getState().downloads.find(
-      d => d.filePath === filePath && d.status === 'completed'
-    );
-    
-    if (existingDownload && existingDownload.localPath) {
-      // File is already downloaded, open it
-      openFile(fileName, filePath);
-    } else {
-      // File not downloaded yet, download it
-      downloadFile(fileName, filePath);
-    }
+    // openFile opens a cached local copy if available, otherwise downloads
+    // (with progress) and then opens it.
+    openFile(fileName, filePath);
   };
 
   const onDownloadPress = (fileName: string, filePath: string, isDirectory: boolean) => {
@@ -177,88 +168,86 @@ export const FileBrowserScreen: React.FC = () => {
 
     return (
       <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <View style={styles.headerLeft}>
-            {canGoBack && !selectionMode && (
-              <TouchableOpacity
-                onPress={onBackPress}
-                style={styles.backButton}
-                activeOpacity={0.7}>
-                <Icon name="chevron-left" size={24} color={theme.colors.primary} />
-              </TouchableOpacity>
-            )}
-            {selectionMode && (
-              <TouchableOpacity
-                onPress={() => {
-                  clearSelection();
-                  toggleSelectionMode();
-                }}
-                style={styles.backButton}
-                activeOpacity={0.7}>
-                <Icon name="close" size={24} color={theme.colors.primary} />
-              </TouchableOpacity>
-            )}
-            <View style={styles.headerTitleContainer}>
-              <Text style={styles.headerTitle}>
-                {selectionMode ? `${selectedItems.size} selected` : currentFolder}
+        {/* Title row — gets the full width so the folder name shows completely */}
+        <View style={styles.headerTitleRow}>
+          {canGoBack && !selectionMode && (
+            <TouchableOpacity
+              onPress={onBackPress}
+              style={styles.backButton}
+              activeOpacity={0.7}>
+              <Icon name="chevron-left" size={24} color={theme.colors.primary} />
+            </TouchableOpacity>
+          )}
+          {selectionMode && (
+            <TouchableOpacity
+              onPress={() => clearSelection()}
+              style={styles.backButton}
+              activeOpacity={0.7}>
+              <Icon name="close" size={24} color={theme.colors.primary} />
+            </TouchableOpacity>
+          )}
+          <View style={styles.headerTitleContainer}>
+            <Text style={styles.headerTitle} numberOfLines={2} ellipsizeMode="tail">
+              {selectionMode ? `${selectedItems.size} selected` : currentFolder}
+            </Text>
+            {!selectionMode && (
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
+                {credentials.host} · {filteredItems.length} of {items.length} items
               </Text>
-              {!selectionMode && (
-                <Text style={styles.headerSubtitle}>
-                  {credentials.host} · {filteredItems.length} of {items.length} items
-                </Text>
-              )}
-            </View>
-          </View>
-          <View style={styles.headerActions}>
-            {selectionMode ? (
-              <>
-                <TouchableOpacity
-                  onPress={selectAll}
-                  style={styles.iconButton}
-                  activeOpacity={0.7}>
-                  <Icon name="select-all" size={20} color={theme.colors.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={downloadSelected}
-                  style={[styles.iconButton, selectedItems.size === 0 && styles.iconButtonDisabled]}
-                  activeOpacity={0.7}
-                  disabled={selectedItems.size === 0}>
-                  <Icon name="download" size={20} color={selectedItems.size === 0 ? theme.colors.onSurfaceVariant : theme.colors.primary} />
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <TouchableOpacity
-                  onPress={toggleSelectionMode}
-                  style={styles.iconButton}
-                  activeOpacity={0.7}>
-                  <Icon name="checkbox-multiple-marked-outline" size={20} color={theme.colors.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => setShowFilters(!showFilters)}
-                  style={[styles.iconButton, hasActiveFilters && styles.iconButtonActive]}
-                  activeOpacity={0.7}>
-                  <Icon 
-                    name={showFilters ? "filter-off" : "filter-variant"} 
-                    size={20} 
-                    color={hasActiveFilters ? theme.colors.primary : theme.colors.onSurfaceVariant} 
-                  />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('Downloads' as never)}
-                  style={styles.iconButton}
-                  activeOpacity={0.7}>
-                  <Icon name="download" size={20} color={theme.colors.primary} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={handleSignOut}
-                  style={styles.iconButton}
-                  activeOpacity={0.7}>
-                  <Icon name="logout" size={20} color={theme.colors.error} />
-                </TouchableOpacity>
-              </>
             )}
           </View>
+        </View>
+
+        {/* Action row — buttons on their own line below the title */}
+        <View style={styles.headerActions}>
+          {selectionMode ? (
+            <>
+              <TouchableOpacity
+                onPress={selectAll}
+                style={styles.iconButton}
+                activeOpacity={0.7}>
+                <Icon name="select-all" size={20} color={theme.colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={downloadSelected}
+                style={[styles.iconButton, selectedItems.size === 0 && styles.iconButtonDisabled]}
+                activeOpacity={0.7}
+                disabled={selectedItems.size === 0}>
+                <Icon name="download" size={20} color={selectedItems.size === 0 ? theme.colors.onSurfaceVariant : theme.colors.primary} />
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <TouchableOpacity
+                onPress={toggleSelectionMode}
+                style={styles.iconButton}
+                activeOpacity={0.7}>
+                <Icon name="checkbox-multiple-marked-outline" size={20} color={theme.colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowFilters(!showFilters)}
+                style={[styles.iconButton, hasActiveFilters && styles.iconButtonActive]}
+                activeOpacity={0.7}>
+                <Icon 
+                  name={showFilters ? "filter-off" : "filter-variant"} 
+                  size={20} 
+                  color={hasActiveFilters ? theme.colors.primary : theme.colors.onSurfaceVariant} 
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('Downloads' as never)}
+                style={styles.iconButton}
+                activeOpacity={0.7}>
+                <Icon name="download" size={20} color={theme.colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleSignOut}
+                style={styles.iconButton}
+                activeOpacity={0.7}>
+                <Icon name="logout" size={20} color={theme.colors.error} />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* Search Bar */}
@@ -321,9 +310,22 @@ export const FileBrowserScreen: React.FC = () => {
 
   const renderItem = ({item, index}: {item: FileItem; index: number}) => {
     const {iconName, color} = getFileIcon(item.name, item.type);
-    const isLast = index === items.length - 1;
+    const isLast = index === filteredItems.length - 1;
     const isDownloading = downloadingFile === item.name;
     const isSelected = selectedItems.has(item.path);
+
+    // In recursive-filter mode, show the file's subfolder location so the user
+    // knows where each match lives.
+    const isRecursive = activeFilters.some(f =>
+      ['image', 'video', 'audio', 'document', 'archive', 'other'].includes(f),
+    );
+    const parentDir = item.path.includes('/')
+      ? item.path.slice(0, item.path.lastIndexOf('/'))
+      : '';
+    const relativeDir =
+      currentPath && parentDir.startsWith(currentPath)
+        ? parentDir.slice(currentPath.length).replace(/^\//, '')
+        : parentDir;
 
     const handlePress = () => {
       console.log('[FileBrowser] File item pressed:', item.name, item.type);
@@ -374,8 +376,9 @@ export const FileBrowserScreen: React.FC = () => {
         </View>
         <View style={styles.fileInfo}>
           <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
-          <Text style={styles.fileMeta}>
+          <Text style={styles.fileMeta} numberOfLines={1}>
             {item.type === 'directory' ? 'Folder' : formatFileSize(item.size)}
+            {isRecursive && relativeDir ? `  ·  📁 ${relativeDir}` : ''}
           </Text>
         </View>
         {!selectionMode && item.type === 'directory' && (
@@ -439,6 +442,16 @@ export const FileBrowserScreen: React.FC = () => {
       );
     }
 
+    // Recursive filter scan with no matches yet
+    if (isSearching && filteredItems.length === 0) {
+      return (
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.loadingText}>Scanning subfolders…</Text>
+        </View>
+      );
+    }
+
     if (items.length === 0) {
       return (
         <View style={styles.centerContainer}>
@@ -448,14 +461,33 @@ export const FileBrowserScreen: React.FC = () => {
       );
     }
 
+    if (filteredItems.length === 0) {
+      return (
+        <View style={styles.centerContainer}>
+          <Icon name="file-search-outline" size={64} color={theme.colors.onSurfaceVariant} />
+          <Text style={styles.emptyText}>No matching files found</Text>
+        </View>
+      );
+    }
+
     return (
-      <FlatList
-        data={filteredItems}
-        renderItem={renderItem}
-        keyExtractor={(item, index) => `${item.path}-${index}`}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-      />
+      <>
+        {isSearching && (
+          <View style={styles.scanBanner}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={styles.scanBannerText}>
+              Scanning subfolders… {filteredItems.length} found
+            </Text>
+          </View>
+        )}
+        <FlatList
+          data={filteredItems}
+          renderItem={renderItem}
+          keyExtractor={(item, index) => `${item.path}-${index}`}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+        />
+      </>
     );
   };
 
@@ -490,24 +522,27 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.outline,
   },
-  headerTop: {
+  headerTitleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
+    alignItems: 'flex-start',
+    marginBottom: 10,
   },
   headerLeft: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     flex: 1,
+    minWidth: 0,
+    marginRight: 8,
   },
   headerTitleContainer: {
     flex: 1,
+    minWidth: 0, // critical — lets Text shrink and ellipsize
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'flex-end',
+    gap: 10,
   },
   backButton: {
     width: 32,
@@ -519,8 +554,8 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   iconButton: {
-    width: 36,
-    height: 36,
+    width: 34,
+    height: 34,
     borderRadius: 8,
     backgroundColor: theme.colors.surfaceVariant,
     alignItems: 'center',
@@ -599,6 +634,19 @@ const styles = StyleSheet.create({
   listContent: {
     paddingVertical: 4,
     paddingHorizontal: 16,
+  },
+  scanBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    backgroundColor: theme.colors.primary + '12',
+  },
+  scanBannerText: {
+    fontFamily: 'Poppins-Medium',
+    fontSize: 12,
+    color: theme.colors.primary,
   },
   fileItem: {
     flexDirection: 'row',
