@@ -32,7 +32,6 @@ export const ConnectionScreen: React.FC = () => {
     setPassword,
     setDomain,
     validateAndConnect,
-    reset,
   } = useConnectionStore();
 
   // Local state for UI-specific features
@@ -80,7 +79,7 @@ export const ConnectionScreen: React.FC = () => {
       }
     };
     loadSaved();
-  }, []);
+  }, [navigation, setDomain, setHost, setPassword, setShareName, setUsername]);
 
   const handleConnect = async () => {
     const success = await validateAndConnect();
@@ -133,7 +132,7 @@ export const ConnectionScreen: React.FC = () => {
         <View style={styles.iconCircle}>
           <Text style={styles.iconText}>S</Text>
         </View>
-        <ActivityIndicator size="large" color={theme.colors.primary} style={{marginTop: 24}} />
+        <ActivityIndicator size="large" color={theme.colors.primary} style={styles.autoConnectSpinner} />
         <Text style={styles.autoConnectText}>Connecting...</Text>
       </View>
     );
@@ -580,6 +579,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  autoConnectSpinner: {
+    marginTop: 24,
   },
   autoConnectText: {
     fontFamily: 'Poppins-Regular',

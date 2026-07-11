@@ -1,65 +1,86 @@
-import {create} from 'zustand';
-import {persist, createJSONStorage, StateStorage} from 'zustand/middleware';
+import {NativeEventEmitter, NativeModules} from 'react-native';
 import EncryptedStorage from 'react-native-encrypted-storage';
+import {create} from 'zustand';
+import {createJSONStorage, persist, StateStorage} from 'zustand/middleware';
 import {SmbModule} from '../native/SmbModule';
 
-// Create a storage adapter for EncryptedStorage
 const encryptedStorageAdapter: StateStorage = {
-  getItem: async (name: string) => {
-    try {
-      const value = await EncryptedStorage.getItem(name);
-      return value;
-    } catch (error) {
-      console.error('Error reading from encrypted storage:', error);
-      return null;
-    }
-  },
-  setItem: async (name: string, value: string) => {
-    try {
-      await EncryptedStorage.setItem(name, value);
-    } catch (error) {
-      console.error('Error writing to encrypted storage:', error);
-    }
-  },
-  removeItem: async (name: string) => {
-    try {
-      await EncryptedStorage.removeItem(name);
-    } catch (error) {
-      console.error('Error removing from encrypted storage:', error);
-    }
-  },
+  getItem: async name => EncryptedStorage.getItem(name),
+  setItem: async (name, value) => EncryptedStorage.setItem(name, value),
+  removeItem: async name => EncryptedStorage.removeItem(name),
 };
+
+export interface DownloadConnection {
+  host: string;
+  shareName: string;
+  username: string;
+  password: string;
+  domain: string | null;
+}
+
+export type DownloadStatus =
+  | 'downloading'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface DownloadItem {
   id: string;
   fileName: string;
   filePath: string;
   localPath: string;
+  partialPath?: string;
   totalBytes: number;
   downloadedBytes: number;
-  speed: number; // bytes per second
-  eta: number; // seconds
-  status: 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  speed: number;
+  eta: number;
+  status: DownloadStatus;
   error?: string;
   startTime: number;
-  lastUpdateTime?: number; // For throttling updates
+  lastUpdateTime?: number;
+  sampleBytes: number;
+  connection: DownloadConnection;
 }
+
+type NewDownload = Pick<
+  DownloadItem,
+  'fileName' | 'filePath' | 'localPath' | 'totalBytes' | 'connection'
+>;
 
 interface DownloadState {
   downloads: DownloadItem[];
-  addDownload: (download: Omit<DownloadItem, 'id' | 'downloadedBytes' | 'speed' | 'eta' | 'status' | 'startTime'>) => string;
-  updateDownloadProgress: (id: string, downloadedBytes: number) => void;
-  pauseDownload: (id: string) => void;
-  resumeDownload: (id: string) => void;
-  cancelDownload: (id: string) => void;
+  addDownload: (download: NewDownload) => string;
+  startDownload: (id: string) => Promise<string | undefined>;
+  updateDownloadProgress: (id: string, downloadedBytes: number, totalBytes?: number) => void;
+  pauseDownload: (id: string) => Promise<void>;
+  resumeDownload: (id: string) => Promise<void>;
+  retryDownload: (id: string) => Promise<void>;
+  cancelDownload: (id: string) => Promise<void>;
   completeDownload: (id: string, localPath?: string) => void;
   failDownload: (id: string, error: string) => void;
-  /** Delete the local file from disk and remove the entry from the store. */
   deleteDownload: (id: string) => Promise<void>;
-  /** Delete all completed entries and their local files from disk. */
   clearCompleted: () => Promise<void>;
   getDownload: (id: string) => DownloadItem | undefined;
   clearInProgressDownloads: () => void;
+}
+
+const emitter = new NativeEventEmitter(NativeModules.SmbModule);
+let progressSubscription: {remove: () => void} | undefined;
+
+function ensureProgressListener() {
+  if (progressSubscription) {
+    return;
+  }
+  progressSubscription = emitter.addListener('downloadProgress', event => {
+    useDownloadStore
+      .getState()
+      .updateDownloadProgress(event.downloadId, event.downloadedBytes, event.totalBytes);
+  });
+}
+
+function errorCode(error: unknown) {
+  return (error as {code?: string})?.code || '';
 }
 
 export const useDownloadStore = create<DownloadState>()(
@@ -67,152 +88,235 @@ export const useDownloadStore = create<DownloadState>()(
     (set, get) => ({
       downloads: [],
 
-      addDownload: (download) => {
-        const id = `download_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+      addDownload: download => {
+        const duplicate = get().downloads.find(
+          item =>
+            item.filePath === download.filePath &&
+            item.connection.host === download.connection.host &&
+            item.connection.shareName === download.connection.shareName &&
+            item.status !== 'cancelled',
+        );
+        if (duplicate) {
+          if (duplicate.status === 'failed' || duplicate.status === 'paused') {
+            get().resumeDownload(duplicate.id).catch(() => undefined);
+          }
+          return duplicate.id;
+        }
+
+        const id = `download_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         const now = Date.now();
-        const newDownload: DownloadItem = {
-          ...download,
-          id,
-          downloadedBytes: 0,
-          speed: 0,
-          eta: 0,
-          status: 'downloading',
-          startTime: now,
-          lastUpdateTime: now,
-        };
-        
-        set((state) => ({
-          downloads: [newDownload, ...state.downloads],
+        set(state => ({
+          downloads: [
+            {
+              ...download,
+              id,
+              downloadedBytes: 0,
+              speed: 0,
+              eta: 0,
+              status: 'downloading',
+              startTime: now,
+              lastUpdateTime: now,
+              sampleBytes: 0,
+            },
+            ...state.downloads,
+          ],
         }));
-        
+        get().startDownload(id).catch(() => undefined);
         return id;
       },
 
-      updateDownloadProgress: (id, downloadedBytes) => {
-        const now = Date.now();
-        const state = get();
-        const download = state.downloads.find(d => d.id === id);
-        
-        // Throttle updates to max once per 500ms to prevent lag
-        if (download && download.lastUpdateTime && (now - download.lastUpdateTime) < 500) {
-          return;
+      startDownload: async id => {
+        ensureProgressListener();
+        const item = get().downloads.find(download => download.id === id);
+        if (!item || item.status === 'completed') {
+          return item?.localPath;
         }
+        const partial = await SmbModule.getPartialDownloadInfo(id, item.fileName);
+        const now = Date.now();
+        set(state => ({
+          downloads: state.downloads.map(download =>
+            download.id === id
+              ? {
+                  ...download,
+                  status: 'downloading',
+                  error: undefined,
+                  partialPath: partial.path,
+                  downloadedBytes: partial.bytes,
+                  sampleBytes: partial.bytes,
+                  speed: 0,
+                  eta: 0,
+                  startTime: now,
+                  lastUpdateTime: now,
+                }
+              : download,
+          ),
+        }));
 
-        set((state) => ({
-          downloads: state.downloads.map((download) => {
-            if (download.id === id && download.status === 'downloading') {
-              const elapsedSeconds = (now - download.startTime) / 1000;
-              const speed = elapsedSeconds > 0 ? downloadedBytes / elapsedSeconds : 0;
-              const remainingBytes = download.totalBytes - downloadedBytes;
-              const eta = speed > 0 ? remainingBytes / speed : 0;
+        try {
+          const {connection} = item;
+          const localPath = await SmbModule.downloadFileWithProgress(
+            connection.host,
+            connection.shareName,
+            item.filePath,
+            connection.username,
+            connection.password,
+            connection.domain,
+            item.fileName,
+            id,
+          );
+          get().completeDownload(id, localPath);
+          return localPath;
+        } catch (error: any) {
+          const code = errorCode(error);
+          if (code === 'DOWNLOAD_PAUSED' || code === 'DOWNLOAD_CANCELLED') {
+            return undefined;
+          }
+          get().failDownload(id, error?.message || 'Download interrupted');
+          return undefined;
+        }
+      },
 
-              return {
-                ...download,
-                downloadedBytes,
-                speed,
-                eta,
-                lastUpdateTime: now,
-              };
+      updateDownloadProgress: (id, downloadedBytes, totalBytes) => {
+        const now = Date.now();
+        set(state => ({
+          downloads: state.downloads.map(download => {
+            if (download.id !== id || download.status !== 'downloading') {
+              return download;
             }
-            return download;
+            const elapsed = Math.max((now - (download.lastUpdateTime || now)) / 1000, 0.001);
+            const instantSpeed = Math.max(downloadedBytes - download.sampleBytes, 0) / elapsed;
+            const speed = download.speed > 0 ? download.speed * 0.65 + instantSpeed * 0.35 : instantSpeed;
+            const size = totalBytes || download.totalBytes;
+            return {
+              ...download,
+              downloadedBytes,
+              totalBytes: size,
+              sampleBytes: downloadedBytes,
+              speed,
+              eta: speed > 0 ? Math.max(size - downloadedBytes, 0) / speed : 0,
+              lastUpdateTime: now,
+            };
           }),
         }));
       },
 
-      pauseDownload: (id) => {
-        set((state) => ({
-          downloads: state.downloads.map((download) =>
-            download.id === id ? {...download, status: 'paused' as const} : download
+      pauseDownload: async id => {
+        await SmbModule.pauseDownload(id);
+        const item = get().downloads.find(download => download.id === id);
+        const partial = item
+          ? await SmbModule.getPartialDownloadInfo(id, item.fileName)
+          : undefined;
+        set(state => ({
+          downloads: state.downloads.map(download =>
+            download.id === id
+              ? {
+                  ...download,
+                  status: 'paused',
+                  speed: 0,
+                  eta: 0,
+                  downloadedBytes: partial?.bytes ?? download.downloadedBytes,
+                  partialPath: partial?.path ?? download.partialPath,
+                }
+              : download,
           ),
         }));
       },
 
-      resumeDownload: (id) => {
-        set((state) => ({
-          downloads: state.downloads.map((download) =>
-            download.id === id 
-              ? {...download, status: 'downloading' as const, startTime: Date.now()} 
-              : download
-          ),
-        }));
+      resumeDownload: async id => {
+        await get().startDownload(id);
       },
 
-      cancelDownload: (id) => {
-        set((state) => ({
-          downloads: state.downloads.filter((download) => download.id !== id),
-        }));
+      retryDownload: async id => {
+        await get().startDownload(id);
       },
 
-      deleteDownload: async (id) => {
-        const download = get().downloads.find(d => d.id === id);
-        if (download?.localPath) {
-          try {
-            await SmbModule.deleteFile(download.localPath);
-          } catch (err) {
-            console.warn('[DownloadStore] Failed to delete file:', err);
-          }
+      cancelDownload: async id => {
+        const item = get().downloads.find(download => download.id === id);
+        if (!item) {
+          return;
         }
-        set((state) => ({
-          downloads: state.downloads.filter(d => d.id !== id),
-        }));
+        await SmbModule.cancelDownload(id, item.fileName);
+        set(state => ({downloads: state.downloads.filter(download => download.id !== id)}));
+      },
+
+      completeDownload: (id, localPath) =>
+        set(state => ({
+          downloads: state.downloads.map(download =>
+            download.id === id
+              ? {
+                  ...download,
+                  status: 'completed',
+                  downloadedBytes: download.totalBytes,
+                  localPath: localPath || download.localPath,
+                  partialPath: undefined,
+                  speed: 0,
+                  eta: 0,
+                  error: undefined,
+                }
+              : download,
+          ),
+        })),
+
+      failDownload: (id, error) =>
+        set(state => ({
+          downloads: state.downloads.map(download =>
+            download.id === id
+              ? {...download, status: 'failed', speed: 0, eta: 0, error}
+              : download,
+          ),
+        })),
+
+      deleteDownload: async id => {
+        const item = get().downloads.find(download => download.id === id);
+        if (!item) {
+          return;
+        }
+        if (item.status === 'downloading') {
+          await SmbModule.cancelDownload(id, item.fileName);
+        }
+        if (item.localPath) {
+          await SmbModule.deleteFile(item.localPath).catch(() => false);
+        }
+        await SmbModule.deletePartialDownload(id, item.fileName).catch(() => false);
+        set(state => ({downloads: state.downloads.filter(download => download.id !== id)}));
       },
 
       clearCompleted: async () => {
-        const completed = get().downloads.filter(d => d.status === 'completed' && d.localPath);
-        // Delete all local files in parallel, ignore individual errors
+        const completed = get().downloads.filter(download => download.status === 'completed');
         await Promise.allSettled(
-          completed.map(d => d.localPath ? SmbModule.deleteFile(d.localPath).catch(() => {}) : Promise.resolve()),
-        );
-        set((state) => ({
-          downloads: state.downloads.filter(d => d.status !== 'completed'),
-        }));
-      },
-
-      completeDownload: (id, localPath?: string) => {
-        set((state) => ({
-          downloads: state.downloads.map((download) => {
-            if (download.id === id) {
-              return {
-                ...download, 
-                status: 'completed' as const, 
-                downloadedBytes: download.totalBytes,
-                localPath: localPath || download.localPath
-              };
-            }
-            return download;
-          }),
-        }));
-      },
-
-      failDownload: (id, error) => {
-        set((state) => ({
-          downloads: state.downloads.map((download) =>
-            download.id === id ? {...download, status: 'failed' as const, error} : download
+          completed.map(download =>
+            download.localPath
+              ? SmbModule.deleteFile(download.localPath)
+              : Promise.resolve(true),
           ),
+        );
+        set(state => ({
+          downloads: state.downloads.filter(download => download.status !== 'completed'),
         }));
       },
 
-      getDownload: (id) => {
-        return get().downloads.find((download) => download.id === id);
-      },
+      getDownload: id => get().downloads.find(download => download.id === id),
 
-      clearInProgressDownloads: () => {
-        set((state) => ({
-          downloads: state.downloads.map((download) => {
-            if (download.status === 'downloading' || download.status === 'paused') {
-              return {...download, status: 'failed' as const, error: 'App was closed'};
-            }
-            return download;
-          }),
-        }));
-      },
+      clearInProgressDownloads: () =>
+        set(state => ({
+          downloads: state.downloads.map(download =>
+            download.status === 'downloading'
+              ? {
+                  ...download,
+                  status: 'paused',
+                  error: 'Interrupted — ready to resume',
+                  speed: 0,
+                  eta: 0,
+                }
+              : download,
+          ),
+        })),
     }),
     {
-      name: 'download-storage',
+      name: 'download-storage-v2',
       storage: createJSONStorage(() => encryptedStorageAdapter),
-      partialize: (state) => ({
-        downloads: state.downloads.filter(d => d.status === 'completed' || d.status === 'failed'),
-      }),
-    }
-  )
+      partialize: state => ({downloads: state.downloads}),
+      onRehydrateStorage: () => state => state?.clearInProgressDownloads(),
+    },
+  ),
 );

@@ -51,6 +51,24 @@ import java.util.concurrent.atomic.AtomicInteger
 class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     private val executor: ExecutorService = Executors.newCachedThreadPool()
+    private val downloadControls = ConcurrentHashMap<String, String>()
+
+    private fun downloadDirectory(): File {
+        val root = reactApplicationContext.getExternalFilesDir(null) ?: reactApplicationContext.filesDir
+        return File(root, "downloads").apply { if (!exists()) mkdirs() }
+    }
+
+    private fun safeDownloadName(downloadId: String, fileName: String): String {
+        val safeId = downloadId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+        val safeName = File(fileName).name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        return "${safeId}_$safeName"
+    }
+
+    private fun partialFile(downloadId: String, fileName: String) =
+        File(downloadDirectory(), ".${safeDownloadName(downloadId, fileName)}.part")
+
+    private fun completedFile(downloadId: String, fileName: String) =
+        File(downloadDirectory(), safeDownloadName(downloadId, fileName))
 
     // ── HTTP proxy state ─────────────────────────────────────────────────────
     data class ProxySession(
@@ -142,7 +160,12 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
                 val session = proxySessions[token]
                 if (session == null) { send404(output); return }
 
-                val (rangeStart, rangeEnd) = parseRange(headers["range"], session.fileSize)
+                val range = parseRange(headers["range"], session.fileSize)
+                if (range == null) {
+                    sendRangeNotSatisfiable(output, session.fileSize)
+                    return
+                }
+                val (rangeStart, rangeEnd) = range
 
                 if (method == "HEAD") {
                     writeHeaders(output, session, rangeStart, rangeEnd)
@@ -199,14 +222,22 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
             }
         }
 
-        private fun parseRange(header: String?, fileSize: Long): Pair<Long, Long> {
-            if (header != null && header.startsWith("bytes=")) {
-                val r   = header.removePrefix("bytes=").split("-")
-                val s   = r[0].toLongOrNull() ?: 0L
-                val e   = if (r.size > 1 && r[1].isNotEmpty()) r[1].toLongOrNull() ?: (fileSize - 1) else (fileSize - 1)
-                return Pair(s.coerceIn(0, fileSize - 1), e.coerceIn(0, fileSize - 1))
+        private fun parseRange(header: String?, fileSize: Long): Pair<Long, Long>? {
+            if (fileSize <= 0) return Pair(0L, 0L)
+            if (header == null) return Pair(0L, fileSize - 1)
+            if (!header.startsWith("bytes=") || header.contains(',')) return null
+            val values = header.removePrefix("bytes=").split("-", limit = 2)
+            if (values.size != 2) return null
+            if (values[0].isEmpty()) {
+                val suffixLength = values[1].toLongOrNull() ?: return null
+                if (suffixLength <= 0) return null
+                return Pair((fileSize - suffixLength).coerceAtLeast(0), fileSize - 1)
             }
-            return Pair(0L, fileSize - 1)
+            val start = values[0].toLongOrNull() ?: return null
+            if (start < 0 || start >= fileSize) return null
+            val end = if (values[1].isEmpty()) fileSize - 1 else values[1].toLongOrNull() ?: return null
+            if (end < start) return null
+            return Pair(start, end.coerceAtMost(fileSize - 1))
         }
 
         private fun writeHeaders(output: OutputStream, session: ProxySession, start: Long, end: Long) {
@@ -227,6 +258,13 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
 
         private fun send404(output: OutputStream) {
             output.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+            output.flush()
+        }
+
+        private fun sendRangeNotSatisfiable(output: OutputStream, fileSize: Long) {
+            output.write(
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */$fileSize\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray(),
+            )
             output.flush()
         }
 
@@ -508,7 +546,7 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
         }
     }
 
-    // ── downloadFileWithProgress ─────────────────────────────────────────────
+    // ── resumable downloads ───────────────────────────────────────────────────
     @ReactMethod
     fun downloadFileWithProgress(
         host: String,
@@ -521,81 +559,131 @@ class SmbModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMod
         downloadId: String,
         promise: Promise
     ) {
+        downloadControls[downloadId] = "running"
         executor.execute {
             var connection: Connection? = null
             var session: Session? = null
             var share: DiskShare? = null
+            var smbFile: com.hierynomus.smbj.share.File? = null
+            var inputStream: InputStream? = null
+            var outputStream: FileOutputStream? = null
+            val partial = partialFile(downloadId, localFileName)
             try {
-                val storageDir = reactApplicationContext.getExternalFilesDir(null) ?: reactApplicationContext.filesDir
-                if (!storageDir.exists()) storageDir.mkdirs()
-
-                var finalFileName = localFileName
-                var localFile = File(storageDir, finalFileName)
-                var counter = 1
-                while (localFile.exists()) {
-                    val nameParts = localFileName.split(".")
-                    finalFileName = if (nameParts.size > 1)
-                        "${nameParts.dropLast(1).joinToString(".")}_$counter.${nameParts.last()}"
-                    else "${localFileName}_$counter"
-                    localFile = File(storageDir, finalFileName)
-                    counter++
-                }
-
                 val client = SMBClient()
                 connection = client.connect(host)
-                val authContext = if (domain != null && domain.isNotEmpty())
+                val authContext = if (!domain.isNullOrEmpty())
                     AuthenticationContext(username, password.toCharArray(), domain)
-                else
-                    AuthenticationContext(username, password.toCharArray(), null)
+                else AuthenticationContext(username, password.toCharArray(), null)
                 session = connection.authenticate(authContext)
                 share = session.connectShare(shareName) as DiskShare
-
-                val smbFile = share.openFile(remotePath, EnumSet.of(AccessMask.GENERIC_READ), null,
+                smbFile = share.openFile(remotePath, EnumSet.of(AccessMask.GENERIC_READ), null,
                     EnumSet.of(SMB2ShareAccess.FILE_SHARE_READ), SMB2CreateDisposition.FILE_OPEN, null)
-                val fileSize = smbFile.fileInformation.standardInformation.endOfFile
-                val inputStream = smbFile.inputStream
-                val outputStream = FileOutputStream(localFile)
-                val buffer = ByteArray(65536)
-                var bytesRead: Int
-                var totalBytesRead: Long = 0
-                var lastEmitTime: Long = 0
 
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                val fileSize = smbFile.fileInformation.standardInformation.endOfFile
+                if (partial.length() > fileSize) partial.delete()
+                var totalBytesRead = partial.length()
+                inputStream = smbFile.inputStream
+                var remainingSkip = totalBytesRead
+                while (remainingSkip > 0) {
+                    val skipped = inputStream.skip(remainingSkip)
+                    if (skipped <= 0) {
+                        if (inputStream.read() == -1) break
+                        remainingSkip--
+                    } else remainingSkip -= skipped
+                }
+                outputStream = FileOutputStream(partial, true)
+                emitDownloadProgress(downloadId, totalBytesRead, fileSize)
+
+                val buffer = ByteArray(65536)
+                var lastEmitTime = 0L
+                while (downloadControls[downloadId] == "running") {
+                    val bytesRead = inputStream.read(buffer)
+                    if (bytesRead == -1) break
                     outputStream.write(buffer, 0, bytesRead)
                     totalBytesRead += bytesRead
                     val now = System.currentTimeMillis()
                     if (now - lastEmitTime >= 200) {
                         lastEmitTime = now
-                        val params = Arguments.createMap()
-                        params.putString("downloadId", downloadId)
-                        params.putDouble("downloadedBytes", totalBytesRead.toDouble())
-                        params.putDouble("totalBytes", fileSize.toDouble())
-                        reactApplicationContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                            .emit("downloadProgress", params)
+                        emitDownloadProgress(downloadId, totalBytesRead, fileSize)
                     }
                 }
-                outputStream.flush(); outputStream.close(); inputStream.close(); smbFile.close()
+                outputStream.flush()
 
-                val finalParams = Arguments.createMap()
-                finalParams.putString("downloadId", downloadId)
-                finalParams.putDouble("downloadedBytes", totalBytesRead.toDouble())
-                finalParams.putDouble("totalBytes", fileSize.toDouble())
-                reactApplicationContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-                    .emit("downloadProgress", finalParams)
-
-                promise.resolve(localFile.absolutePath)
-            } catch (e: com.hierynomus.mssmb2.SMBApiException) {
-                promise.reject("SMB_ERROR", "SMB operation failed: ${e.message}", e)
-            } catch (e: SMBRuntimeException) {
-                promise.reject("SMB_ERROR", "Authentication failed: ${e.message}", e)
-            } catch (e: java.io.IOException) {
-                promise.reject("NETWORK_ERROR", "Network error: ${e.message}", e)
+                when (downloadControls[downloadId]) {
+                    "paused" -> promise.reject("DOWNLOAD_PAUSED", "Download paused")
+                    "cancelled" -> {
+                        partial.delete()
+                        promise.reject("DOWNLOAD_CANCELLED", "Download cancelled")
+                    }
+                    else -> {
+                        if (totalBytesRead < fileSize) throw java.io.IOException("Download ended before all bytes were received")
+                        val completed = completedFile(downloadId, localFileName)
+                        if (completed.exists()) completed.delete()
+                        if (!partial.renameTo(completed)) {
+                            partial.copyTo(completed, overwrite = true)
+                            partial.delete()
+                        }
+                        emitDownloadProgress(downloadId, fileSize, fileSize)
+                        promise.resolve(completed.absolutePath)
+                    }
+                }
             } catch (e: Exception) {
-                promise.reject("UNKNOWN_ERROR", "Operation failed: ${e.message}", e)
+                when (downloadControls[downloadId]) {
+                    "paused" -> promise.reject("DOWNLOAD_PAUSED", "Download paused")
+                    "cancelled" -> {
+                        partial.delete()
+                        promise.reject("DOWNLOAD_CANCELLED", "Download cancelled")
+                    }
+                    else -> promise.reject("DOWNLOAD_ERROR", "Download failed: ${e.message}", e)
+                }
             } finally {
+                downloadControls.remove(downloadId)
+                try { outputStream?.close(); inputStream?.close(); smbFile?.close() } catch (_: Exception) { }
                 try { share?.close(); session?.close(); connection?.close() } catch (_: Exception) { }
             }
         }
+    }
+
+    private fun emitDownloadProgress(downloadId: String, downloaded: Long, total: Long) {
+        val params = Arguments.createMap()
+        params.putString("downloadId", downloadId)
+        params.putDouble("downloadedBytes", downloaded.toDouble())
+        params.putDouble("totalBytes", total.toDouble())
+        reactApplicationContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit("downloadProgress", params)
+    }
+
+    @ReactMethod
+    fun pauseDownload(downloadId: String, promise: Promise) {
+        downloadControls[downloadId] = "paused"
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun cancelDownload(downloadId: String, localFileName: String, promise: Promise) {
+        val wasRunning = downloadControls.containsKey(downloadId)
+        downloadControls[downloadId] = "cancelled"
+        if (!wasRunning) {
+            partialFile(downloadId, localFileName).delete()
+            downloadControls.remove(downloadId)
+        }
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun getPartialDownloadInfo(downloadId: String, localFileName: String, promise: Promise) {
+        val partial = partialFile(downloadId, localFileName)
+        val result = Arguments.createMap()
+        result.putString("path", partial.absolutePath)
+        result.putDouble("bytes", if (partial.exists()) partial.length().toDouble() else 0.0)
+        promise.resolve(result)
+    }
+
+    @ReactMethod
+    fun deletePartialDownload(downloadId: String, localFileName: String, promise: Promise) {
+        downloadControls[downloadId] = "cancelled"
+        val deleted = partialFile(downloadId, localFileName).let { !it.exists() || it.delete() }
+        promise.resolve(deleted)
     }
 
     // ── deleteFile ───────────────────────────────────────────────────────────
