@@ -92,10 +92,7 @@ android {
             }
         }
     }
-    
-    // Configure shorter build output directory
-    buildDir = "C:/tmp/build/${project.name}"
-    
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
