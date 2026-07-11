@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- ── Network signal waves (NAS broadcasting on the network) ── -->
+    <path
+        android:pathData="M40.9,36.8 A16,16 0 0 1 67.1,36.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.55" />
+    <path
+        android:pathData="M46.6,40.8 A9,9 0 0 1 61.4,40.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.85" />
+    <!-- Emitter dot -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M51,46 a3,3 0 1 0 6,0 a3,3 0 1 0 -6,0 z" />
+
+    <!-- ── Top server unit ── -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,50 h48 a4,4 0 0 1 4,4 v7 a4,4 0 0 1 -4,4 h-48 a4,4 0 0 1 -4,-4 v-7 a4,4 0 0 1 4,-4 z" />
+    <!-- Top unit grille -->
+    <path
+        android:fillColor="#BFD6EC"
+        android:pathData="M33.5,55 h9 a1.5,1.5 0 0 1 1.5,1.5 v2 a1.5,1.5 0 0 1 -1.5,1.5 h-9 a1.5,1.5 0 0 1 -1.5,-1.5 v-2 a1.5,1.5 0 0 1 1.5,-1.5 z" />
+    <!-- Top unit status LED (green) -->
+    <path
+        android:fillColor="#5FBF86"
+        android:pathData="M71.5,57.5 a2.6,2.6 0 1 0 5.2,0 a2.6,2.6 0 1 0 -5.2,0 z" />
+
+    <!-- ── Bottom server unit ── -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,70 h48 a4,4 0 0 1 4,4 v7 a4,4 0 0 1 -4,4 h-48 a4,4 0 0 1 -4,-4 v-7 a4,4 0 0 1 4,-4 z" />
+    <!-- Bottom unit grille -->
+    <path
+        android:fillColor="#BFD6EC"
+        android:pathData="M33.5,75 h9 a1.5,1.5 0 0 1 1.5,1.5 v2 a1.5,1.5 0 0 1 -1.5,1.5 h-9 a1.5,1.5 0 0 1 -1.5,-1.5 v-2 a1.5,1.5 0 0 1 1.5,-1.5 z" />
+    <!-- Bottom unit status LED (amber) -->
+    <path
+        android:fillColor="#E8B24C"
+        android:pathData="M71.5,77.5 a2.6,2.6 0 1 0 5.2,0 a2.6,2.6 0 1 0 -5.2,0 z" />
+</vector>

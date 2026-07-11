@@ -1,0 +1,31 @@
+<svg width="1024" height="1024" viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="6" y1="6" x2="102" y2="102" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4C7EB4"/>
+      <stop offset="1" stop-color="#2C547F"/>
+    </linearGradient>
+    <linearGradient id="hi" x1="54" y1="0" x2="54" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded app-icon background -->
+  <rect x="0" y="0" width="108" height="108" rx="24" fill="url(#bg)"/>
+  <path d="M0,24 a24,24 0 0 1 24,-24 h60 a24,24 0 0 1 24,24 v16 q-54,18 -108,0 z" fill="url(#hi)"/>
+
+  <!-- Network signal waves -->
+  <path d="M40.9,36.8 A16,16 0 0 1 67.1,36.8" fill="none" stroke="#FFFFFF" stroke-width="3.4" stroke-linecap="round" stroke-opacity="0.55"/>
+  <path d="M46.6,40.8 A9,9 0 0 1 61.4,40.8" fill="none" stroke="#FFFFFF" stroke-width="3.4" stroke-linecap="round" stroke-opacity="0.85"/>
+  <circle cx="54" cy="46" r="3" fill="#FFFFFF"/>
+
+  <!-- Top server unit -->
+  <rect x="26" y="50" width="56" height="15" rx="4" fill="#FFFFFF"/>
+  <rect x="32" y="55" width="12" height="5" rx="1.5" fill="#BFD6EC"/>
+  <circle cx="74.1" cy="57.5" r="2.6" fill="#5FBF86"/>
+
+  <!-- Bottom server unit -->
+  <rect x="26" y="70" width="56" height="15" rx="4" fill="#FFFFFF"/>
+  <rect x="32" y="75" width="12" height="5" rx="1.5" fill="#BFD6EC"/>
+  <circle cx="74.1" cy="77.5" r="2.6" fill="#E8B24C"/>
+</svg>
