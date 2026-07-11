@@ -1,10 +1,10 @@
 import {create} from 'zustand';
 import {FileItem, SmbCredentials} from '../native/types';
 import {SmbModule} from '../native/SmbModule';
-import {NativeEventEmitter, NativeModules} from 'react-native';
 import {useDownloadStore} from './useDownloadStore';
 
 export type FileTypeFilter = 'all' | 'folder' | 'image' | 'video' | 'audio' | 'document' | 'archive' | 'other';
+export type SortField = 'name' | 'size' | 'type';
 
 interface FileBrowserState {
   // State
@@ -27,6 +27,8 @@ interface FileBrowserState {
   // Search and filter
   searchQuery: string;
   activeFilters: FileTypeFilter[];
+  sortField: SortField;
+  sortAscending: boolean;
 
   // Selection
   selectionMode: boolean;
@@ -50,6 +52,7 @@ interface FileBrowserState {
   setSearchQuery: (query: string) => void;
   toggleFilter: (filter: FileTypeFilter) => void;
   clearFilters: () => void;
+  setSort: (field: SortField) => void;
   applyFilters: () => void;
   /** Recursively walks the current folder tree collecting files matching active filters */
   runRecursiveFilter: () => Promise<void>;
@@ -132,6 +135,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
   snackbarType: 'success',
   searchQuery: '',
   activeFilters: [],
+  sortField: 'name',
+  sortAscending: true,
   selectionMode: false,
   selectedItems: new Set(),
 
@@ -228,34 +233,20 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       const fileSize = files.find(f => f.path === filePath)?.size || 0;
 
       const downloadId = useDownloadStore.getState().addDownload({
-        fileName, filePath, localPath: '', totalBytes: fileSize,
+        fileName,
+        filePath,
+        localPath: '',
+        totalBytes: fileSize,
+        connection: {
+          host: credentials.host,
+          shareName: credentials.shareName,
+          username: credentials.username,
+          password: credentials.password,
+          domain: credentials.domain || null,
+        },
       });
-      showSnackbar(`Downloading ${fileName}...`, 'success');
-
-      const eventEmitter = new NativeEventEmitter(NativeModules.SmbModule);
-      const subscription = eventEmitter.addListener('downloadProgress', (event: any) => {
-        if (event.downloadId === downloadId) {
-          useDownloadStore.getState().updateDownloadProgress(downloadId, event.downloadedBytes);
-        }
-      });
-
-      try {
-        const localFilePath = await SmbModule.downloadFileWithProgress(
-          credentials.host, credentials.shareName, filePath,
-          credentials.username, credentials.password, credentials.domain || null,
-          fileName, downloadId,
-        );
-        useDownloadStore.getState().completeDownload(downloadId, localFilePath);
-        showSnackbar(`Downloaded: ${fileName}`, 'success');
-        return localFilePath;
-      } catch (err: any) {
-        const msg = mapErrorToMessage(err);
-        useDownloadStore.getState().failDownload(downloadId, msg);
-        showSnackbar(msg, 'error');
-        return null;
-      } finally {
-        subscription.remove();
-      }
+      showSnackbar(`Downloading ${fileName}. You can pause it from Downloads.`, 'success');
+      return useDownloadStore.getState().getDownload(downloadId)?.localPath || null;
     } catch (err: any) {
       showSnackbar(mapErrorToMessage(err), 'error');
       return null;
@@ -354,19 +345,32 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
     get().applyFilters();
   },
 
-  applyFilters: () => {
-    const {items, recursiveResults, searchQuery, activeFilters} = get();
+  setSort: (field) => {
+    const {sortField, sortAscending} = get();
+    set({
+      sortField: field,
+      sortAscending: sortField === field ? !sortAscending : true,
+    });
+    get().applyFilters();
+  },
 
-    if (needsRecursiveScan(activeFilters)) {
-      // Recursive results are already filtered by type — just apply the search text
-      set({filteredItems: recursiveResults.filter(i => matchesSearch(i, searchQuery))});
-    } else {
-      set({
-        filteredItems: items.filter(item =>
-          matchesSearch(item, searchQuery) && matchesFilter(item, activeFilters),
-        ),
-      });
-    }
+  applyFilters: () => {
+    const {items, recursiveResults, searchQuery, activeFilters, sortField, sortAscending} = get();
+    const source = needsRecursiveScan(activeFilters) ? recursiveResults : items;
+    const filtered = source.filter(item =>
+      matchesSearch(item, searchQuery) &&
+      (needsRecursiveScan(activeFilters) || matchesFilter(item, activeFilters)),
+    );
+    filtered.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+      let comparison = 0;
+      if (sortField === 'size') comparison = a.size - b.size;
+      else if (sortField === 'type') {
+        comparison = getFileTypeFromExtension(a.name).localeCompare(getFileTypeFromExtension(b.name));
+      } else comparison = a.name.localeCompare(b.name);
+      return sortAscending ? comparison : -comparison;
+    });
+    set({filteredItems: filtered});
   },
 
   runRecursiveFilter: async () => {
@@ -458,6 +462,8 @@ export const useFileBrowserStore = create<FileBrowserState>((set, get) => ({
       snackbarType: 'success',
       searchQuery: '',
       activeFilters: [],
+      sortField: 'name',
+      sortAscending: true,
       selectionMode: false,
       selectedItems: new Set(),
     });

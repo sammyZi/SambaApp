@@ -42,6 +42,17 @@ interface SmbModuleInterface {
     downloadId: string,
   ): Promise<string>;
 
+  pauseDownload(downloadId: string): Promise<boolean>;
+  cancelDownload(downloadId: string, localFileName: string): Promise<boolean>;
+  getPartialDownloadInfo(
+    downloadId: string,
+    localFileName: string,
+  ): Promise<{path: string; bytes: number}>;
+  deletePartialDownload(
+    downloadId: string,
+    localFileName: string,
+  ): Promise<boolean>;
+
   /**
    * Starts an in-process HTTP proxy server and returns an http://127.0.0.1 URL
    * immediately. The media player opens the URL and the proxy handles all

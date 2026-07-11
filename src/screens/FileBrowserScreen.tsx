@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useState} from 'react';
 import {
   View,
   StyleSheet,
@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   BackHandler,
   ScrollView,
+  RefreshControl,
+  Alert,
 } from 'react-native';
 import {Text, Button, Snackbar, Searchbar, Chip} from 'react-native-paper';
 import {useRoute, useNavigation, CommonActions} from '@react-navigation/native';
@@ -19,6 +21,11 @@ import {clearCredentials} from '../utils/credentialStore';
 import {useFileBrowserStore, FileTypeFilter} from '../stores/useFileBrowserStore';
 
 type FileBrowserRouteProp = RouteProp<RootStackParamList, 'FileBrowser'>;
+
+const getFileTypeLabel = (name: string) => {
+  const extension = name.split('.').pop()?.toUpperCase();
+  return extension && extension !== name.toUpperCase() ? `${extension} file` : 'File';
+};
 
 const FILTER_OPTIONS: {type: FileTypeFilter; label: string; icon: string}[] = [
   {type: 'folder', label: 'Folders', icon: 'folder'},
@@ -79,6 +86,8 @@ export const FileBrowserScreen: React.FC = () => {
     snackbarType,
     searchQuery,
     activeFilters,
+    sortField,
+    sortAscending,
     selectionMode,
     selectedItems,
     setCredentials,
@@ -93,6 +102,7 @@ export const FileBrowserScreen: React.FC = () => {
     setSearchQuery,
     toggleFilter,
     clearFilters,
+    setSort,
     reset,
     openFile,
     toggleSelectionMode,
@@ -112,7 +122,7 @@ export const FileBrowserScreen: React.FC = () => {
     return () => {
       reset();
     };
-  }, []);
+  }, [credentials, initialPath, loadFiles, reset, setCredentials, setCurrentPath]);
 
   const handleRetry = () => {
     loadFiles(currentPath);
@@ -147,9 +157,9 @@ export const FileBrowserScreen: React.FC = () => {
     }
   };
 
-  const onBackPress = () => {
+  const onBackPress = useCallback(() => {
     return navigateBack();
-  };
+  }, [navigateBack]);
 
   useEffect(() => {
     const backHandler = BackHandler.addEventListener(
@@ -158,7 +168,7 @@ export const FileBrowserScreen: React.FC = () => {
     );
 
     return () => backHandler.remove();
-  }, [navigationStack]);
+  }, [onBackPress]);
 
   const renderHeader = () => {
     const canGoBack = navigationStack.length > 0;
@@ -219,6 +229,13 @@ export const FileBrowserScreen: React.FC = () => {
           ) : (
             <>
               <TouchableOpacity
+                onPress={() => loadFiles(currentPath)}
+                style={styles.iconButton}
+                activeOpacity={0.7}
+                accessibilityLabel="Refresh folder">
+                <Icon name="refresh" size={20} color={theme.colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={toggleSelectionMode}
                 style={styles.iconButton}
                 activeOpacity={0.7}>
@@ -268,6 +285,21 @@ export const FileBrowserScreen: React.FC = () => {
             showsHorizontalScrollIndicator={false}
             style={styles.filterContainer}
             contentContainerStyle={styles.filterContent}>
+            {(['name', 'size', 'type'] as const).map(field => (
+              <Chip
+                key={field}
+                selected={sortField === field}
+                onPress={() => setSort(field)}
+                style={[
+                  styles.filterChip,
+                  sortField === field && styles.filterChipSelected,
+                ]}
+                textStyle={styles.filterChipText}
+                icon={sortField === field ? (sortAscending ? 'arrow-up' : 'arrow-down') : 'sort'}
+                mode="outlined">
+                {field.charAt(0).toUpperCase() + field.slice(1)}
+              </Chip>
+            ))}
             {FILTER_OPTIONS.map((filter) => (
               <Chip
                 key={filter.type}
@@ -328,8 +360,6 @@ export const FileBrowserScreen: React.FC = () => {
         : parentDir;
 
     const handlePress = () => {
-      console.log('[FileBrowser] File item pressed:', item.name, item.type);
-      
       if (selectionMode) {
         toggleItemSelection(item.path);
       } else if (item.type === 'directory') {
@@ -347,8 +377,15 @@ export const FileBrowserScreen: React.FC = () => {
     };
 
     const handleDownloadPress = () => {
-      console.log('[FileBrowser] Download button pressed:', item.name);
       onDownloadPress(item.name, item.path, item.type === 'directory');
+    };
+
+    const showDetails = () => {
+      Alert.alert(
+        item.name,
+        `Type: ${item.type === 'directory' ? 'Folder' : getFileTypeLabel(item.name)}\nSize: ${item.type === 'directory' ? '—' : formatFileSize(item.size)}\nPath: /${item.path}`,
+        [{text: 'Close'}],
+      );
     };
 
     return (
@@ -377,12 +414,18 @@ export const FileBrowserScreen: React.FC = () => {
         <View style={styles.fileInfo}>
           <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
           <Text style={styles.fileMeta} numberOfLines={1}>
-            {item.type === 'directory' ? 'Folder' : formatFileSize(item.size)}
-            {isRecursive && relativeDir ? `  ·  📁 ${relativeDir}` : ''}
+            {item.type === 'directory' ? 'Folder' : `${getFileTypeLabel(item.name)} · ${formatFileSize(item.size)}`}
+            {isRecursive && relativeDir ? ` · /${relativeDir}` : ''}
           </Text>
         </View>
-        {!selectionMode && item.type === 'directory' && (
-          <Icon name="chevron-right" size={24} color={theme.colors.onSurfaceVariant} />
+        {!selectionMode && (
+          <TouchableOpacity
+            style={styles.detailsButton}
+            onPress={showDetails}
+            activeOpacity={0.7}
+            accessibilityLabel={`Details for ${item.name}`}>
+            <Icon name="information-outline" size={19} color={theme.colors.onSurfaceVariant} />
+          </TouchableOpacity>
         )}
         {!selectionMode && item.type === 'file' && !isDownloading && (
           <TouchableOpacity
@@ -486,6 +529,14 @@ export const FileBrowserScreen: React.FC = () => {
           keyExtractor={(item, index) => `${item.path}-${index}`}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={isLoading}
+              onRefresh={() => loadFiles(currentPath)}
+              colors={[theme.colors.primary]}
+              tintColor={theme.colors.primary}
+            />
+          }
         />
       </>
     );
@@ -685,6 +736,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: theme.colors.onSurfaceVariant,
     marginTop: 2,
+  },
+  detailsButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
   },
   downloadButton: {
     width: 36,

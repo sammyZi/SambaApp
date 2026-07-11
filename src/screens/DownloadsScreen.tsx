@@ -45,10 +45,10 @@ export const DownloadsScreen: React.FC = () => {
     downloads,
     pauseDownload,
     resumeDownload,
+    retryDownload,
     cancelDownload,
     deleteDownload,
     clearCompleted,
-    clearInProgressDownloads,
   } = useDownloadStore();
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -61,11 +61,6 @@ export const DownloadsScreen: React.FC = () => {
     });
     return () => backHandler.remove();
   }, [navigation]);
-
-  // Mark in-progress downloads as failed on mount (can't resume after restart)
-  useEffect(() => {
-    clearInProgressDownloads();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── formatters ────────────────────────────────────────────────────────────
   const formatSpeed = useCallback((bps: number): string => {
@@ -208,7 +203,16 @@ export const DownloadsScreen: React.FC = () => {
                     style={styles.actionBtn}
                   />
                 )}
-                {/* Completed/failed: trash icon deletes file from disk */}
+                {isFailed && (
+                  <IconButton
+                    icon="refresh"
+                    size={18}
+                    onPress={() => retryDownload(item.id)}
+                    iconColor={theme.colors.primary}
+                    style={styles.actionBtn}
+                    accessibilityLabel={`Retry ${item.fileName}`}
+                  />
+                )}
                 {(isCompleted || isFailed) && (
                   <IconButton
                     icon="trash-can-outline"
@@ -217,6 +221,7 @@ export const DownloadsScreen: React.FC = () => {
                     iconColor={theme.colors.error}
                     style={styles.actionBtn}
                     disabled={isBeingDeleted}
+                    accessibilityLabel={`Delete ${item.fileName}`}
                   />
                 )}
               </View>
@@ -250,7 +255,9 @@ export const DownloadsScreen: React.FC = () => {
                   {isPaused && (
                     <>
                       <Text style={styles.statsDot}>•</Text>
-                      <Text style={styles.statsText}>Paused</Text>
+                      <Text style={styles.statsText}>
+                        Paused · resumes from {formatSize(item.downloadedBytes)}
+                      </Text>
                     </>
                   )}
                 </View>
@@ -282,6 +289,7 @@ export const DownloadsScreen: React.FC = () => {
       handleDelete,
       pauseDownload,
       resumeDownload,
+      retryDownload,
       cancelDownload,
       formatSize,
       formatSpeed,
@@ -347,7 +355,7 @@ export const DownloadsScreen: React.FC = () => {
           <Icon name="download-off" size={64} color={theme.colors.onSurfaceVariant} />
           <Text style={styles.emptyText}>No downloads yet</Text>
           <Text style={styles.emptySubText}>
-            Tap any file to stream-open it.{'\n'}It gets saved here automatically.
+            Use the download button beside a file to save it here.{'\n'}Video playback history is managed by your external player.
           </Text>
         </View>
       ) : (
